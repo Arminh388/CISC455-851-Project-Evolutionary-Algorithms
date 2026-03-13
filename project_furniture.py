@@ -345,19 +345,117 @@ class BoundingBox:
 
         return True
 
+# Armin's translation of Paul's Vec class
+class Vec(list):
+    def __init__(self, *args):
+        # allow Vec([1,2,3]) or Vec(1,2,3)
+        if len(args) == 1 and isinstance(args[0], (list, Vec)):
+            super().__init__(args[0])
+        else:
+            super().__init__(args)
 
-class Vec:
-    """
-    Simple vector class.
-    """
+    @property
+    def x(self):
+        return self[0]
 
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
+    @x.setter
+    def x(self, num):
+        self[0] = num
 
-    def add(self, other):
-        self.x += other.x
-        self.y += other.y
+    @property
+    def y(self):
+        return self[1]
+
+    @y.setter
+    def y(self, num):
+        self[1] = num
+
+    @property
+    def z(self):
+        return self[2]
+
+    @z.setter
+    def z(self, num):
+        self[2] = num
+
+    def add(self, *vs):
+        max_len = max((len(v) for v in vs), default=0)
+        for v in vs:
+            for i, e in enumerate(v):
+                if i < len(self):
+                    self[i] += e
+                else:
+                    self.append(e)
+        return self
+
+    def subtract(self, v):
+        max_len = max(len(self), len(v))
+        for i in range(max_len):
+            a = self[i] if i < len(self) else 0
+            b = v[i] if i < len(v) else 0
+            if i < len(self):
+                self[i] = a - b
+            else:
+                self.append(-b)
+        return self
+
+    def scale(self, s):
+        for i in range(len(self)):
+            self[i] *= s
+        return self
+
+    def magn(self):
+        import math
+        return math.hypot(*self)
+
+    def norm(self):
+        mag = self.magn()
+        if mag != 0:
+            self.scale(1 / mag)
+        return self
+
+    def copy(self, v):
+        self.clear()
+        self.extend(v)
+        return self
+
+    def equals(self, obj):
+        return isinstance(obj, Vec) and all(a == b for a, b in zip(self, obj))
+
+    # static helpers mirroring original JS utilities
+    @staticmethod
+    def add_static(*vs):
+        max_len = max((len(v) for v in vs), default=0)
+        result = Vec([0] * max_len)
+        for v in vs:
+            for i, e in enumerate(v):
+                result[i] += e
+        return result
+
+    @staticmethod
+    def subtract_static(v1, v2):
+        max_len = max(len(v1), len(v2))
+        result = Vec([0] * max_len)
+        for i in range(max_len):
+            result[i] = (v1[i] if i < len(v1) else 0) - (v2[i] if i < len(v2) else 0)
+        return result
+
+    @staticmethod
+    def scale_static(v, s):
+        return Vec([e * s for e in v])
+
+    @staticmethod
+    def dot(v1, v2):
+        max_len = max(len(v1), len(v2))
+        return sum((v1[i] if i < len(v1) else 0) * (v2[i] if i < len(v2) else 0) for i in range(max_len))
+
+    @staticmethod
+    def cross(v1, v2):
+        return Vec(
+            v1[1] * v2[2] - v1[2] * v2[1],
+            v1[2] * v2[0] - v1[0] * v2[2],
+            v1[0] * v2[1] - v1[1] * v2[0],
+        )
 
 
 
@@ -401,6 +499,11 @@ visualize_solution(obstacles, furnitures, rand_sol)
 x = 3
 y = 4
 print(f"\n======================\nROTATION OF FURNITURE\nTop-Left Corner @ ({x},{y})")
+
+# furniture is shaped:
+#     #  #  #  #  #
+#     #  .  .  .  .
+#     #  .  .  .  .
 furnitures = [Furniture([[1,1,1,1,1],
                          [1,0,0,0,0],
                          [1,0,0,0,0]])]
