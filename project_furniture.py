@@ -55,9 +55,9 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False):
     # ADD EA below
     for gen in range(GENERATION_COUNT):
         # mutation rates decrease with generations
-        #swap_chance = int(10*(1.01**gen))
-        #xy_sigma = 2*(0.999**gen)
-        #rot_sigma = 0.999**gen
+        swap_chance = int(10*(1.01**gen))
+        xy_sigma = 2*(0.999**gen)
+        rot_sigma = 0.999**gen
 
         mating_pool = tournament(pop, fitness, MATING_POOL_SIZE, TOURNAMENT_SIZE)
         offspring = []
@@ -68,8 +68,7 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False):
 
         # mutate offspring
         for ind in offspring:
-            #mutate(ind, swap_chance, xy_sigma, rot_sigma)
-            mutate(ind)
+            mutate(ind, swap_chance, xy_sigma, rot_sigma)
         
         # calculate offspring fitness
         offspring_fitness = [eval_fit(obstacles, furniture, ind) for ind in offspring]
