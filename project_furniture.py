@@ -530,13 +530,13 @@ def tournament(pop, fitness, mating_pool_size, tournament_size):
 
         # compare fitnesses
         for i in range(0,len(tournament_indices)):
-            # if new individual has lowest fitness so far
+            # if new individual has highest fitness so far
             if fitness[tournament_indices[i]] >= fitness[first]:
                 # update both frontrunners
                 second = first
                 first = tournament_indices[i]
 
-            # if new individual has second lowest fitness so far
+            # if new individual has second highest fitness so far
             elif fitness[tournament_indices[i]] >= fitness[second]:
                 # update 2nd place
                 second = tournament_indices[i]
@@ -547,7 +547,7 @@ def tournament(pop, fitness, mating_pool_size, tournament_size):
 
 def sort_population(pop, fitness):
     """
-    Sorts a population by fitness (ascending value).
+    Sorts a population by fitness (descending value).
     Borrowed from Coding Exercise 1.
 
     Parameters:
@@ -559,9 +559,9 @@ def sort_population(pop, fitness):
 
     Returns:
         sorted_pop (list):
-            a sorted copy of pop (ascending fitness).
+            a sorted copy of pop (descending fitness).
         sorted_fitness (list):
-            a sorted copy of fitness (ascending).
+            a sorted copy of fitness (descending).
     """
     pop_fit_gain_loss_tup = list(map(list, zip(pop, fitness)))
     pop_fit_gain_loss_tup.sort(key=operator.itemgetter(1), reverse=True)
