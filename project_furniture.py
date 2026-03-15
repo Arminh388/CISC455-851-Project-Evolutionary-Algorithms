@@ -10,7 +10,7 @@ from enum import Enum
 
 def fit_furniture(obstacles, furniture, map_name=None, animate=False):
     """
-    Runs the Evolutionary Algorithm (EA).
+    Runs the Evolutionary Algorithm (EA). Plots the fitness trajectory of evolution.
 
     Parameters:
         obstacles (list): 
@@ -21,7 +21,7 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False):
         map_name (str):
             the name of the map used, if chosen from the pre-made list. (DEFAULT = None)
         animate (Bool):
-            if True, plot the best individual from certain generations as evolution progresses. (DEFAULT = False)
+            if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
             
     Returns:
         pop (list): 
@@ -38,19 +38,20 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False):
 
     POP_SIZE = 1000
     MATING_POOL_SIZE = 100
-    TOURNAMENT_SIZE = 4
+    TOURNAMENT_SIZE = 10
     GENERATION_COUNT = 1000
     ANIMATION_CYCLE = 100 # plot best individual ever <ANIMATION_CYCLE> generations
 
     best_fits = []
     avg_fits = []
+    worst_fits = []
 
     # individuals are lists of positions for each furniture
     pop = [[Pos.rand(l, w) for _ in range(n)]
            for _ in range(POP_SIZE)]
     
     # calculate individual fitnesses
-    fitness = [eval_fit(obstacles, furniture, ind) for ind in pop]
+    fitness = [eval_fit(obstacles, furniture, ind)[0] for ind in pop]
 
     # ADD EA below
     for gen in range(GENERATION_COUNT):
@@ -71,30 +72,40 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False):
             mutate(ind, swap_chance, xy_sigma, rot_sigma)
         
         # calculate offspring fitness
-        offspring_fitness = [eval_fit(obstacles, furniture, ind) for ind in offspring]
+        offspring_fitness = [eval_fit(obstacles, furniture, ind)[0] for ind in offspring]
+
 
         # replace population
         pop, fitness = replacement(pop, fitness, offspring, offspring_fitness)
 
         # generation stats
-        best_fit = min(fitness)
+        best_fit = max(fitness)
+        worst_fit = min(fitness)
         avg_fit = sum(fitness)/len(fitness)
         best_fits.append(best_fit)
+        worst_fits.append(worst_fit)
         avg_fits.append(avg_fit)
 
         # print stats
         print(f"====================\nGeneration {gen}\n====================")
         print(f"Best Fitness: {best_fit}")
+        print(f"Worst Fitness: {worst_fit}")
         print(f"Avg. Fitness: {avg_fit}")
 
         if animate:
-            # plot best individual every <ANIMATE_CYCLE> generations
+            # plot best & worst individual every <ANIMATE_CYCLE> generations
             if (gen)%ANIMATION_CYCLE == 0:
-                best_ind = pop[fitness.index(min(fitness))]
-                plot_solution(obstacles, furniture, best_ind, map_name, gen)
+                best_ind = pop[fitness.index(max(fitness))]
+                plot_solution(obstacles, furniture, best_ind, map_name, gen, "Best")
+
+                worst_ind = pop[fitness.index(min(fitness))]
+                plot_solution(obstacles, furniture, worst_ind, map_name, gen, "Worst")
+    
+    # plot fitness trajectories
     plt.figure()
     plt.plot(avg_fits, label="Average Fitness")
     plt.plot(best_fits, label="Best Fitness")
+    plt.plot(worst_fits, label="Worst Fitness")
     plt.xlabel("Generation")
     plt.ylabel("Fitness")
     plt.legend()
@@ -123,7 +134,7 @@ def visualize_solution(obstacles, furniture, individual):
     w = len(obstacles[0])
     n = len(furniture)
 
-    grid = [[0 for _ in range(w)] for _ in range(l)]
+    grid = copy.deepcopy(obstacles)
 
     for i in range(n):
         furn = furniture[i] # furniture object
@@ -143,7 +154,7 @@ def visualize_solution(obstacles, furniture, individual):
     footer_text = "┗  " + "  ".join(str(i) for i in range(w)) + "  ┛"
     print(footer_text)
 
-def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1):
+def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=None):
     """
     Method for visualizing grid with placed furniture.
     Author: ChatGPT
@@ -160,11 +171,13 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1):
             the name of the map used, if chosen from the pre-made list. (DEFAULT = None)
         gen (int):
             the generation # of the current individual, for use in printing the plot title. Will read N/A if no generation # is input. (DEFAULT = -1)
+        rank (str):
+            the rank among the population of the individual being plotted. (DEFAULT = None)
     """
     l = len(obstacles)
     w = len(obstacles[0])
 
-    fitness = eval_fit(obstacles, furniture, individual)
+    fitness, gain, loss = eval_fit(obstacles, furniture, individual)
 
     grid = [[[] for _ in range(w)] for _ in range(l)]
     furn_cells = []
@@ -321,11 +334,13 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1):
     title = ""
     if map_name != None:
         title += f"{map_name}\n"
-    
+    title += f"Furniture Layout "
+    if rank != None:
+        title += rank + " Individual "
     if gen >= 0:
-        title += f"Furniture Layout Best Individual | Generation: {gen}\nFitness: {fitness}"
+        title += f"| Generation: {gen}\nFitness: {fitness} | Gain: {gain} | Loss: {loss}"
     else:
-        title += f"Furniture Layout Best Individual | Generation: N/A\nFitness: {fitness}"
+        title += f"| Generation: N/A\nFitness: {fitness} | Gain: {gain} | Loss: {loss}"
     ax.set_title(title)
 
     plt.show()
@@ -333,7 +348,7 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1):
 def eval_fit(obstacles, furniture, individual):
     """
     Calculates fitness of individuals in the population.
-    Lower value => better fitness.
+    Higher value => better fitness.
 
     Parameters:
         obstacles (list):
@@ -345,30 +360,50 @@ def eval_fit(obstacles, furniture, individual):
             a potential solution represented by positions (Pos) for each Furniture object in the furniture parameter.
 
     Returns:
-        loss (int): 
-            computed penalty for out-of-bounds and overlap with other furniture
+        reward (float): 
+            computed sum of loss (out-of-bounds, overlap) and gain (adjacent empty cells).
+        gain (float):
+            OPEN_FACTOR * (# of unique pairs of adjacent empty cells).
+        loss (float):
+            (number of overlapping furniture/obstacles cells) + (OOB_PENALTY * (out-of-bounds furniture cells)).
 
     """
-
+    l = len(obstacles)
+    w = len(obstacles[0])
     n = len(furniture)
 
     OOB_PENALTY = 3
+    OPEN_FACTOR = 0.05 # should be much lower than 1
 
     overlap = copy.deepcopy(obstacles)
-    loss = 0
+    occupancy = copy.deepcopy(obstacles)
+    loss = 0.0
+    gain = 0.0
 
     # calculate out-of-bounds penalty
     for i in range(n):
         pos = individual[i]
-        loss += furniture[i].project_to(overlap, pos)
+        loss -= furniture[i].project_to(overlap, pos)
+        furniture[i].project_to(occupancy, pos)
 
     loss *= OOB_PENALTY
 
     # calculate overlap
-    overlap = [[max(e - 1, 0) for e in row] for row in overlap]
-    loss += sum(sum(row) for row in overlap)
+    overlap = np.maximum(overlap - 1, 0)
+    loss -= overlap.sum()
 
-    return loss
+    # calculate openness
+    empty = (occupancy == 0)
+
+    gain = (
+        np.sum(empty[1:, :] & empty[:-1, :]) +
+        np.sum(empty[:-1, :] & empty[1:, :])
+    )
+
+    gain *= OPEN_FACTOR
+
+    reward = loss + gain
+    return reward, gain, loss
 
 def mutate(individual, swap_chance=100, xy_sigma=0.5, rot_sigma=0.5):
     """
@@ -463,7 +498,7 @@ def crossover(parent1, parent2):
 
 def tournament(pop, fitness, mating_pool_size, tournament_size):
     """
-    Tournament selection without replacement, lower fitness = better.
+    Tournament selection without replacement, higher fitness = better.
     Adapted from Aidan's Coding Exercise 1.
 
     Paremeters:
@@ -496,13 +531,13 @@ def tournament(pop, fitness, mating_pool_size, tournament_size):
         # compare fitnesses
         for i in range(0,len(tournament_indices)):
             # if new individual has lowest fitness so far
-            if fitness[tournament_indices[i]] <= fitness[first]:
+            if fitness[tournament_indices[i]] >= fitness[first]:
                 # update both frontrunners
                 second = first
                 first = tournament_indices[i]
 
             # if new individual has second lowest fitness so far
-            elif fitness[tournament_indices[i]] <= fitness[second]:
+            elif fitness[tournament_indices[i]] >= fitness[second]:
                 # update 2nd place
                 second = tournament_indices[i]
 
@@ -528,11 +563,11 @@ def sort_population(pop, fitness):
         sorted_fitness (list):
             a sorted copy of fitness (ascending).
     """
-    pop_fit_pair = list(map(list, zip(pop, fitness)))
-    pop_fit_pair.sort(key=operator.itemgetter(1), reverse=False)
+    pop_fit_gain_loss_tup = list(map(list, zip(pop, fitness)))
+    pop_fit_gain_loss_tup.sort(key=operator.itemgetter(1), reverse=True)
     sorted_pop = []
     sorted_fit = []
-    for entry in pop_fit_pair:
+    for entry in pop_fit_gain_loss_tup:
         sorted_pop.append(entry[0])
         sorted_fit.append(entry[1])
     return sorted_pop, sorted_fit
@@ -562,15 +597,13 @@ def replacement(pop, fitness, offspring, offspring_fitness):
 
     new_pop = []
     new_fitness = []
-    new_pop, new_fitness = sort_population(pop.copy(), fitness.copy())
+    new_pop, new_fitness = sort_population(copy.deepcopy(pop), copy.deepcopy(fitness))
     k = len(pop) - len(offspring)
 
     # replace worst members of population with offspring
-    i = 0
-    while i < len(offspring):
+    for i in range(len(offspring)):
         new_pop[k+i] = offspring[i]
         new_fitness[k+i] = offspring_fitness[i]
-        i += 1
 
     return new_pop, new_fitness
 
@@ -941,90 +974,122 @@ class Vec(list):
         )
 
 # some custom maps
-maps = {"Empty10x10":  [[0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0]],
+# note that with the furniture defined in furnitures below, it is impossible to have no overlap and no oob in Big+
+maps = {
+    "Empty10x10": np.array(
+        [[0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0]]),
                         
-        "Split":       [[0,0,0,0,0,1,1,0,0,0,0,0],
-                        [0,0,0,0,0,1,1,0,0,0,0,0],
-                        [0,0,0,0,0,1,1,0,0,0,0,0],
-                        [0,0,0,0,0,1,1,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,1,1,0,0,0,0,0],
-                        [0,0,0,0,0,1,1,0,0,0,0,0],
-                        [0,0,0,0,0,1,1,0,0,0,0,0],
-                        [0,0,0,0,0,1,1,0,0,0,0,0]],
+    "Split": np.array(
+        [[0,0,0,0,0,1,1,0,0,0,0,0],
+         [0,0,0,0,0,1,1,0,0,0,0,0],
+         [0,0,0,0,0,1,1,0,0,0,0,0],
+         [0,0,0,0,0,1,1,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,1,1,0,0,0,0,0],
+         [0,0,0,0,0,1,1,0,0,0,0,0],
+         [0,0,0,0,0,1,1,0,0,0,0,0],
+         [0,0,0,0,0,1,1,0,0,0,0,0]]),
                         
-        "Hall":        [[0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0]],
+    "Hall": np.array(
+        [[0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0]]),
                         
-        "NarrowHall":  [[0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [1,0,0,0,0,1],
-                        [1,0,0,0,0,1],
-                        [1,0,0,0,0,1],
-                        [1,0,0,0,0,1],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0],
-                        [0,0,0,0,0,0]],
+    "NarrowHall": np.array(
+        [[0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [1,0,0,0,0,1],
+         [1,0,0,0,0,1],
+         [1,0,0,0,0,1],
+         [1,0,0,0,0,1],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0]]),
 
-        "BigL":        [[1,1,1,1,1,0,0,0,0,0],
-                        [1,1,1,1,1,0,0,0,0,0],
-                        [1,1,1,1,1,0,0,0,0,0],
-                        [1,1,1,1,1,0,0,0,0,0],
-                        [1,1,1,1,1,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0]],
+    "BigL": np.array(
+        [[1,1,1,1,1,0,0,0,0,0],
+         [1,1,1,1,1,0,0,0,0,0],
+         [1,1,1,1,1,0,0,0,0,0],
+         [1,1,1,1,1,0,0,0,0,0],
+         [1,1,1,1,1,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0]]),
 
-        "Compact":     [[1,1,1,1,1,0,0,0,0,0],
-                        [1,1,1,1,1,0,0,0,0,0],
-                        [1,1,1,1,1,0,0,1,0,0],
-                        [1,1,1,1,1,0,0,0,0,0],
-                        [1,1,1,1,1,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,1,1,1,0,0,0,1,0,0],
-                        [0,1,1,1,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,1,1]],
+    "Compact": np.array(
+        [[1,1,1,1,1,0,0,0,0,0],
+         [1,1,1,1,1,0,0,0,0,0],
+         [1,1,1,1,1,0,0,1,0,0],
+         [1,1,1,1,1,0,0,0,0,0],
+         [1,1,1,1,1,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,1,1,1,0,0,0,1,0,0],
+         [0,1,1,1,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,1,1]]),
 
-        "Big+":        [[1,1,1,0,0,0,0,1,1,1],
-                        [1,1,1,0,0,0,0,1,1,1],
-                        [1,1,1,0,0,0,0,1,1,1],
-                        [1,1,1,0,0,0,0,1,1,1],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [0,0,0,0,0,0,0,0,0,0],
-                        [1,1,1,0,0,0,0,1,1,1],
-                        [1,1,1,0,0,0,0,1,1,1],
-                        [1,1,1,0,0,0,0,1,1,1],
-                        [1,1,1,0,0,0,0,1,1,1]]}
+    "Big+":np.array(
+        [[1,1,1,0,0,0,0,1,1,1],
+         [1,1,1,0,0,0,0,1,1,1],
+         [1,1,1,0,0,0,0,1,1,1],
+         [1,1,1,0,0,0,0,1,1,1],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [1,1,1,0,0,0,0,1,1,1],
+         [1,1,1,0,0,0,0,1,1,1],
+         [1,1,1,0,0,0,0,1,1,1],
+         [1,1,1,0,0,0,0,1,1,1]]),
+                        
+    "Small": np.array(
+        [[0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0],
+         [0,0,0,0,0,0]]),
+         
+    "BigX": np.array(
+        [[0,0,0,1,1,1,1,1,0,0,0],
+         [0,0,0,0,1,1,1,0,0,0,0],
+         [0,0,0,0,0,1,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0,0],
+         [1,0,0,0,0,0,0,0,0,0,1],
+         [1,1,0,0,0,0,0,0,0,1,1],
+         [1,0,0,0,0,0,0,0,0,0,1],
+         [0,0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,1,0,0,0,0,0],
+         [0,0,0,0,1,1,1,0,0,0,0],
+         [0,0,0,1,1,1,1,1,0,0,0]])}
 
 # 6 different furniture items
 furnitures = [
@@ -1052,13 +1117,16 @@ def run_all_maps(animate=False):
 
     Parameters:
         animate (Bool):
-            if True, plot the best individual from certain generations as evolution progresses. (DEFAULT = False)
+            if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
     """
     for name, layout in maps.items():
         pop, fit, gen = fit_furniture(layout, furnitures, name, animate)
-        best_fit = min(fit)
-        best_ind = pop[fit[fit.index(best_fit)]]
-        plot_solution(layout, furnitures, best_ind, name, gen)
+        best_fit = max(fit)
+        worst_fit = min(fit)
+        best_ind = pop[fit.index(best_fit)]
+        worst_ind = pop[fit.index(worst_fit)]
+        plot_solution(layout, furnitures, best_ind, name, gen, "Best")
+        plot_solution(layout, furnitures, worst_ind, name, gen, "Worst")
 
 def run_map(name, animate=False):
     """
@@ -1068,14 +1136,21 @@ def run_map(name, animate=False):
         name (str):
             the name key of the desired layout
         animate (Bool):
-            if True, plot the best individual from certain generations as evolution progresses. (DEFAULT = False)
+            if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
 
     """
     layout = maps[name]
     pop, fit, gen = fit_furniture(layout, furnitures, name, animate)
-    best_fit = min(fit)
-    best_ind = pop[fit[fit.index(best_fit)]]
-    plot_solution(layout, furnitures, best_ind, name, gen)
+    best_fit = max(fit)
+    worst_fit = min(fit)
+    best_ind = pop[fit.index(best_fit)]
+    worst_ind = pop[fit.index(worst_fit)]
+    plot_solution(layout, furnitures, best_ind, name, gen, "Best")
+    plot_solution(layout, furnitures, worst_ind, name, gen, "Worst")
 
-#run_map("Empty10x10")
-run_all_maps()
+
+##########
+# OUTPUT #
+##########
+#run_map("BigX",True)
+#run_all_maps(False)
