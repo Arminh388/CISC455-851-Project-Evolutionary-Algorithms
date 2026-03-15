@@ -42,6 +42,9 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
     MATING_POOL_SIZE = 100
     TOURNAMENT_SIZE = 10
     GENERATION_COUNT = 1000
+    SWAP_SCALE = 10       # lower = higher mutation rate
+    XY_SCALE = 2          # higher = higher mutation rate
+    ROT_SCALE = 1         # higher = higher mutation rate
     ANIMATION_CYCLE = 100 # plot best individual ever <ANIMATION_CYCLE> generations
 
     best_fits = []
@@ -58,9 +61,9 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
     # ADD EA below
     for gen in range(GENERATION_COUNT):
         # mutation rates decrease with generations
-        swap_chance = int(10*(1.01**gen))
-        xy_sigma = 2*(0.999**gen)
-        rot_sigma = 1*(0.999**gen)
+        swap_chance = int(SWAP_SCALE*(1.01**gen))
+        xy_sigma = XY_SCALE*(0.999**gen)
+        rot_sigma = ROT_SCALE*(0.999**gen)
 
         mating_pool = tournament(pop, fitness, MATING_POOL_SIZE, TOURNAMENT_SIZE)
         offspring = []
