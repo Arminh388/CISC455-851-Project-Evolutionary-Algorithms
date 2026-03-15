@@ -1,10 +1,14 @@
 import random
 import math
 import copy
+import operator
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import matplotlib
+import numpy as np
 from enum import Enum
 
-
-def fit_furniture(obstacles, furniture):
+def fit_furniture(obstacles, furniture, map_name=None, animate=False):
     """
     Runs the Evolutionary Algorithm (EA).
 
@@ -14,25 +18,95 @@ def fit_furniture(obstacles, furniture):
             Values of 0 are unoccupied cells, values of 1 are cells occupied by obstacles.
         furniture (list): 
             a list of Furniture objects.
-
+        map_name (str):
+            the name of the map used, if chosen from the pre-made list. (DEFAULT = None)
+        animate (Bool):
+            if True, plot the best individual from certain generations as evolution progresses. (DEFAULT = False)
+            
     Returns:
         pop (list): 
             a 2D list where inner lists are solutions represented by positions (Pos) for each Furniture object in the furniture parameter.
             Represents the final population after running EA.
-
+        fitness (list):
+            a list representing the fitness values of each individual in the population.
+        gen (int):
+            the final generation number reached.
     """
     l = len(obstacles)
     w = len(obstacles[0])
     n = len(furniture)
 
-    POP_SIZE = 1
+    POP_SIZE = 1000
+    MATING_POOL_SIZE = 100
+    TOURNAMENT_SIZE = 4
+    GENERATION_COUNT = 1000
+    ANIMATION_CYCLE = 100 # plot best individual ever <ANIMATION_CYCLE> generations
+
+    best_fits = []
+    avg_fits = []
 
     # individuals are lists of positions for each furniture
     pop = [[Pos.rand(l, w) for _ in range(n)]
            for _ in range(POP_SIZE)]
+    
+    # calculate individual fitnesses
+    fitness = [eval_fit(obstacles, furniture, ind) for ind in pop]
 
     # ADD EA below
-    return pop
+    for gen in range(GENERATION_COUNT):
+        # mutation rates decrease with generations
+        #swap_chance = int(10*(1.01**gen))
+        #xy_sigma = 2*(0.999**gen)
+        #rot_sigma = 0.999**gen
+
+        mating_pool = tournament(pop, fitness, MATING_POOL_SIZE, TOURNAMENT_SIZE)
+        offspring = []
+
+        # generate offspring from each mating pair
+        for p1, p2 in mating_pool:
+            offspring.append(crossover(p1, p2))
+
+        # mutate offspring
+        for ind in offspring:
+            #mutate(ind, swap_chance, xy_sigma, rot_sigma)
+            mutate(ind)
+        
+        # calculate offspring fitness
+        offspring_fitness = [eval_fit(obstacles, furniture, ind) for ind in offspring]
+
+        # replace population
+        pop, fitness = replacement(pop, fitness, offspring, offspring_fitness)
+
+        # generation stats
+        best_fit = min(fitness)
+        avg_fit = sum(fitness)/len(fitness)
+        best_fits.append(best_fit)
+        avg_fits.append(avg_fit)
+
+        # print stats
+        print(f"====================\nGeneration {gen}\n====================")
+        print(f"Best Fitness: {best_fit}")
+        print(f"Avg. Fitness: {avg_fit}")
+
+        if animate:
+            # plot best individual every <ANIMATE_CYCLE> generations
+            if (gen)%ANIMATION_CYCLE == 0:
+                best_ind = pop[fitness.index(min(fitness))]
+                plot_solution(obstacles, furniture, best_ind, map_name, gen)
+    plt.figure()
+    plt.plot(avg_fits, label="Average Fitness")
+    plt.plot(best_fits, label="Best Fitness")
+    plt.xlabel("Generation")
+    plt.ylabel("Fitness")
+    plt.legend()
+    title = ""
+    if map_name != None:
+        title += f"{map_name}\n"
+    title += "Average Fitness and Best Fitness of Each Generation"
+    plt.title(title)
+    plt.show()
+
+    return pop, fitness, gen
 
 def visualize_solution(obstacles, furniture, individual):
     """
@@ -44,8 +118,6 @@ def visualize_solution(obstacles, furniture, individual):
             Values of 0 are unoccupied cells, values of 1 are cells occupied by obstacles.
         furniture (list):
             a list of Furniture objects.
-        individual (list):
-            a potential solution represented by positions (Pos) for each Furniture object in the furniture parameter.
     """
     
     l = len(obstacles)
@@ -72,8 +144,194 @@ def visualize_solution(obstacles, furniture, individual):
     footer_text = "┗  " + "  ".join(str(i) for i in range(w)) + "  ┛"
     print(footer_text)
 
+def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1):
+    """
+    Method for visualizing grid with placed furniture.
+    Author: ChatGPT
 
-def eval_fit(obstacles, furniture, pop):
+    Parameters:
+        obstacles (list): 
+            a 2D list where inner lists represent rows in the gridspace.
+            Values of 0 are unoccupied cells, values of 1 are cells occupied by obstacles.
+        furniture (list): 
+            a list of Furniture objects.
+        individual (list):
+            a potential solution represented by positions (Pos) for each Furniture object in the furniture parameter.
+        map_name (str):
+            the name of the map used, if chosen from the pre-made list. (DEFAULT = None)
+        gen (int):
+            the generation # of the current individual, for use in printing the plot title. Will read N/A if no generation # is input. (DEFAULT = -1)
+    """
+    l = len(obstacles)
+    w = len(obstacles[0])
+
+    fitness = eval_fit(obstacles, furniture, individual)
+
+    grid = [[[] for _ in range(w)] for _ in range(l)]
+    furn_cells = []
+
+    # track OOB furniture extension
+    oob = {}
+
+    # obstacles
+    for y in range(l):
+        for x in range(w):
+            if obstacles[y][x] == 1:
+                grid[y][x].append(0)
+
+    # project furniture
+    for fid, furn in enumerate(furniture, start=1):
+        pos = individual[fid-1]
+        origin = pos.to_vec()
+        cells = []
+
+        for x in range(furn.w):
+            for y in range(furn.l):
+                if furn.occupancy[y][x] == 0:
+                    continue
+
+                rx, ry = furn.rotate(x, y, pos.rot)
+                gx = origin.x + rx
+                gy = origin.y + ry
+
+                # inside grid
+                if 0 <= gx < w and 0 <= gy < l:
+                    grid[gy][gx].append(fid)
+                    cells.append((gx, gy))
+
+                else:
+                    # compute extension distance
+                    dist = max(
+                        -gx if gx < 0 else 0,
+                        gx - (w-1) if gx >= w else 0,
+                        -gy if gy < 0 else 0,
+                        gy - (l-1) if gy >= l else 0
+                    )
+                    # project to border cell
+                    bx = min(max(gx, -1), w)
+                    by = min(max(gy, -1), l)
+                    key = (bx, by)
+                    if key not in oob or dist > oob[key][1]:
+                        oob[key] = (fid, dist)
+
+        furn_cells.append((fid, cells))
+
+    # overlap tracking
+    overlap = np.zeros((l, w))
+    max_overlap = 1
+    for y in range(l):
+        for x in range(w):
+            overlap[y, x] = len(grid[y][x])
+            max_overlap = max(max_overlap, overlap[y, x])
+
+    fig, ax = plt.subplots(figsize=(7,7))
+
+    cmap = matplotlib.colormaps.get_cmap("tab20").resampled(len(furniture))
+    redmap = matplotlib.colormaps.get_cmap("Reds")
+
+    # lightly shade the border cells
+    border_rect_north = patches.Rectangle(
+        (-1, -1), w+2, 1,
+        facecolor="black",
+        alpha=0.1,
+        zorder=0
+    )
+    border_rect_south = patches.Rectangle(
+        (-1, l), w+2, 1,
+        facecolor="black",
+        alpha=0.1,
+        zorder=0
+    )
+    border_rect_east = patches.Rectangle(
+        (w, 0), 1, l,
+        facecolor="black",
+        alpha=0.1,
+        zorder=0
+    )
+    border_rect_west = patches.Rectangle(
+        (-1, 0), 1, l,
+        facecolor="black",
+        alpha=0.1,
+        zorder=0
+    )
+    ax.add_patch(border_rect_north)
+    ax.add_patch(border_rect_south)
+    ax.add_patch(border_rect_east)
+    ax.add_patch(border_rect_west)
+
+    # draw gridlines
+    for x in range(-1, w+2):
+        ax.plot([x, x], [-1, l+1], color="lightgray")
+    for y in range(-1, l+2):
+        ax.plot([-1, w+1], [y, y], color="lightgray")
+
+    # thickened line around the actual grid boundary
+    ax.plot([0, w], [0, 0], color="black", linewidth=2)     # south
+    ax.plot([0, w], [l, l], color="black", linewidth=2)     # north
+    ax.plot([0, 0], [0, l], color="black", linewidth=2)     # west
+    ax.plot([w, w], [0, l], color="black", linewidth=2)     # east
+
+    # draw obstacles
+    for y in range(l):
+        for x in range(w):
+            if obstacles[y][x] == 1:
+                rect = patches.Rectangle((x, y), 1, 1, facecolor="black", zorder=2)
+                ax.add_patch(rect)
+
+    # draw furniture
+    for fid, cells in furn_cells:
+        color = cmap(fid-1)
+        for (x, y) in cells:
+            count = overlap[y, x]
+            face = redmap(count / max_overlap) if count > 1 else color
+            poly = patches.Polygon(
+                [(x, y), (x+1, y), (x+1, y+1), (x, y+1)],
+                facecolor=face, edgecolor="black", zorder=3
+            )
+            ax.add_patch(poly)
+
+    # draw out-of-bounds cells
+    for (bx, by), (fid, dist) in oob.items():
+        color = cmap(fid-1)
+        rect = patches.Rectangle(
+            (bx, by), 1, 1, facecolor=color, edgecolor="black", alpha=0.6, zorder=1
+        )
+        ax.add_patch(rect)
+        ax.text(
+            bx + 0.5, by + 0.5, str(dist),
+            ha="center", va="center", fontsize=9, color="black", fontweight="bold", zorder=4
+        )
+
+    # label interior cells
+    for y in range(l):
+        for x in range(w):
+            if grid[y][x]:
+                label = ",".join(str(i) for i in grid[y][x])
+                if 0 in grid[y][x] or overlap[y, x] > 1:
+                    text_color = "white"
+                else:
+                    text_color = "black"
+                ax.text(
+                    x + 0.5, y + 0.5, label,
+                    ha="center", va="center", fontsize=8, color=text_color, zorder=4
+                )
+
+    ax.set_xlim(-1, w+1)
+    ax.set_ylim(l+1, -1)
+    ax.set_aspect("equal")
+    title = ""
+    if map_name != None:
+        title += f"{map_name}\n"
+    
+    if gen >= 0:
+        title += f"Furniture Layout Best Individual | Generation: {gen}\nFitness: {fitness}"
+    else:
+        title += f"Furniture Layout Best Individual | Generation: N/A\nFitness: {fitness}"
+    ax.set_title(title)
+
+    plt.show()
+
+def eval_fit(obstacles, furniture, individual):
     """
     Calculates fitness of individuals in the population.
     Lower value => better fitness.
@@ -84,8 +342,8 @@ def eval_fit(obstacles, furniture, pop):
             Values of 0 are unoccupied cells, values of 1 are cells occupied by obstacles.
         furniture (list): 
             a list of Furniture objects.
-        pop (list): 
-            a 2D list where inner lists are solutions represented by positions for each Furniture object in the furniture parameter.
+        individual (list):
+            a potential solution represented by positions (Pos) for each Furniture object in the furniture parameter.
 
     Returns:
         loss (int): 
@@ -102,7 +360,7 @@ def eval_fit(obstacles, furniture, pop):
 
     # calculate out-of-bounds penalty
     for i in range(n):
-        pos = pop[i]
+        pos = individual[i]
         loss += furniture[i].project_to(overlap, pos)
 
     loss *= OOB_PENALTY
@@ -113,8 +371,210 @@ def eval_fit(obstacles, furniture, pop):
 
     return loss
 
+def mutate(individual, swap_chance=100, xy_sigma=0.5, rot_sigma=0.5):
+    """
+    Mutates an individual.
 
-# holds furniture shape
+    Parameters:
+        individual (list):
+            an individual of the population represented by positions (Pos) for each Furniture object.
+        swap_chance (int):
+            each position in the individual will have a 1 in swap_chance chance of swapping places with another position in the individual. (DEFAULT = 100)
+        xy_sigma (float):
+            the standard deviation of the gaussian from which the mutated x,y coordinated will be sampled. (DEFAULT = 0.5)
+        rot_sigma (float):
+            the standard deviation of the gaussian from which the mutated rotation will be sampled. (DEFAULT = 0.5)
+    """
+
+    #mut_individual = copy.deepcopy(individual)
+    n = len(individual)
+
+    # swap mutations
+    for p in range(n):
+        if random.randint(0,swap_chance-1) == 0:
+            # get random index other than p. Do this by sampling uniformly from 0 to max_index - 1 (i.e. 0 to n-2)
+            sp = random.randint(0,n-2)
+
+            # ensure all indices can be covered and p is excluded
+            if sp >= p:
+                sp += 1
+
+            # perform swap
+            individual[p], individual[sp] = individual[sp], individual[p]
+
+    # point mutations
+    for pos in individual:
+        # sample mutated values using gaussian
+        mut_x = random.gauss(mu=pos.x, sigma=xy_sigma)
+        mut_y = random.gauss(mu=pos.y, sigma=xy_sigma)
+        mut_rot = random.gauss(mu=pos.rot.value, sigma=rot_sigma)
+
+        # convert sampled values to integers, with rounding bias towards mu (i.e. pre-mutation values)
+        mut_x = math.floor(mut_x) if mut_x >= pos.x else math.ceil(mut_x)
+        mut_y = math.floor(mut_y) if mut_y >= pos.y else math.ceil(mut_y)
+        mut_rot = math.floor(mut_rot) if mut_rot >= pos.rot.value else math.ceil(mut_rot)
+
+        # ensure rotation value is  valid
+        mut_rot = mut_rot % 4
+
+        # set mutated values
+        pos.set_x(mut_x)
+        pos.set_y(mut_y)
+        pos.set_rot(mut_rot)
+
+def crossover(parent1, parent2):
+    """
+    Produces child from 2 parents.
+
+    Paremeters:
+        parent1 (list):
+            an individual of the population represented by positions (Pos) for each Furniture object.
+        parent2 (list):
+            an individual of the population represented by positions (Pos) for each Furniture object.
+
+    Returns:
+        child (list):
+            an individual produced by crossover of 2 parent individuals, represented by positions (Pos) for each Furniture object.
+    """
+
+    n = len(parent1)
+    child = copy.deepcopy(parent1)
+
+    for i in range(n):
+        # get the Pos at index i of parent2 as an iterable
+        p2_pos = parent2[i].to_tuple()
+
+        for j in range(len(p2_pos)):
+            # 50/50 to use each attribute of parent2
+            use_p2 = random.choice([True,False])
+            if use_p2:
+                # get the attribute of parent2's to use (i.e. x, y or rotation)
+                att = p2_pos[j]
+                if j == 0:
+                    # update x
+                    child[i].set_x(att)
+                elif j == 1:
+                    # update y
+                    child[i].set_y(att)
+                elif j == 2:
+                    # update rot
+                    child[i].set_rot(att)
+
+    return child
+
+def tournament(pop, fitness, mating_pool_size, tournament_size):
+    """
+    Tournament selection without replacement, lower fitness = better.
+    Adapted from Aidan's Coding Exercise 1.
+
+    Paremeters:
+        pop (list):
+            a 2D list where inner lists are solutions represented by positions (Pos) for each Furniture object in the furniture parameter.
+            Represents the current population.
+        fitness (list):
+            a list representing the fitness values of each individual in the population.
+        mating_pool_size (int):
+            the number of individuals to be selected to mate.
+        tournament_size (int):
+            the number of individuals to participate in each tournament (higher => more selection pressure).
+
+    Returns:
+        selected_to_mate (list):
+            a list of individuals selected for mating.
+    """
+
+    selected_to_mate = []
+    n = len(fitness)
+
+    while len(selected_to_mate)//2 < mating_pool_size:
+        # generate random indices to participate in tournament
+        tournament_indices = random.sample(range(n),tournament_size)
+        
+        # initialize 1st and 2nd place
+        first = tournament_indices[0]
+        second = tournament_indices[1]
+
+        # compare fitnesses
+        for i in range(0,len(tournament_indices)):
+            # if new individual has lowest fitness so far
+            if fitness[tournament_indices[i]] <= fitness[first]:
+                # update both frontrunners
+                second = first
+                first = tournament_indices[i]
+
+            # if new individual has second lowest fitness so far
+            elif fitness[tournament_indices[i]] <= fitness[second]:
+                # update 2nd place
+                second = tournament_indices[i]
+
+        selected_to_mate.append((pop[first], pop[second]))
+
+    return selected_to_mate
+
+def sort_population(pop, fitness):
+    """
+    Sorts a population by fitness (ascending value).
+    Borrowed from Coding Exercise 1.
+
+    Parameters:
+        pop (list):
+            a 2D list where inner lists are solutions represented by positions (Pos) for each Furniture object in the furniture parameter.
+            Represents the current population.
+        fitness (list):
+            a list representing the fitness values of each individual in the population.
+
+    Returns:
+        sorted_pop (list):
+            a sorted copy of pop (ascending fitness).
+        sorted_fitness (list):
+            a sorted copy of fitness (ascending).
+    """
+    pop_fit_pair = list(map(list, zip(pop, fitness)))
+    pop_fit_pair.sort(key=operator.itemgetter(1), reverse=False)
+    sorted_pop = []
+    sorted_fit = []
+    for entry in pop_fit_pair:
+        sorted_pop.append(entry[0])
+        sorted_fit.append(entry[1])
+    return sorted_pop, sorted_fit
+
+def replacement(pop, fitness, offspring, offspring_fitness):
+    """
+    Offspring to replace the worst individuals in the current generation.
+
+    Parameters:
+        pop (list):
+            a 2D list where inner lists are solutions represented by positions (Pos) for each Furniture object in the furniture parameter.
+            Represents the current population.
+        fitness (list):
+            a list representing the fitness values of each individual in the population.
+        offspring (list):
+            a 2D list where inner lists are solutions represented by positions (Pos) for each Furniture object in the furniture parameter.
+            Represents the offspring that will replace members of the population.
+        offspring_fitness (list):
+            a list representing the fitness values of each offspring.
+        
+    Returns:
+        new_pop (list):
+            the population with the n worst members replaced by the n offspring.
+        new_fitness (list):
+            a list representing the fitness values of each individual in the new population.
+    """
+
+    new_pop = []
+    new_fitness = []
+    new_pop, new_fitness = sort_population(pop.copy(), fitness.copy())
+    k = len(pop) - len(offspring)
+
+    # replace worst members of population with offspring
+    i = 0
+    while i < len(offspring):
+        new_pop[k+i] = offspring[i]
+        new_fitness[k+i] = offspring_fitness[i]
+        i += 1
+
+    return new_pop, new_fitness
+
 class Furniture:
     """
     Holds the furniture shape.
@@ -187,7 +647,6 @@ class Furniture:
         l = len(grid)
         w = len(grid[0])
 
-
         bounds = BoundingBox(Vec(0, 0), Vec(w-1, l-1))
         origin = pos.to_vec()
 
@@ -208,8 +667,6 @@ class Furniture:
 
         return oob
 
-
-# position with rotation
 class Pos:
     """
     Represents the (x,y) coordinate and rotation for placing a furniture object.
@@ -265,11 +722,40 @@ class Pos:
         self.y = y
         self.rot = rot
 
+    def __str__(self):
+        return f"({self.x}, {self.y}, {self.rot})"
+
     def to_vec(self):
         """
         Converts x, y coordinates to Vec object.
         """
         return Vec(self.x, self.y)
+    
+    def to_tuple(self):
+        """
+        Converts Pos object to tuple of form (self.x, self.y, self.rot).
+        """
+        return self.x, self.y, self.rot
+    
+    def set_x(self, x):
+        """
+        Sets the x coordinate.
+        """
+        self.x =x
+
+    def set_y(self, y):
+        """
+        Sets the y coordinate.
+        """
+        self.y = y
+    
+    def set_rot(self, rot):
+        """
+        Sets the rotation.
+        """
+        if isinstance(rot,int):
+            rot = Pos.DIR(rot)
+        self.rot = rot
 
     @staticmethod
     def rand(l, w):
@@ -294,8 +780,6 @@ class Pos:
 
         return Pos(x, y, rot)
 
-
-# bounding box
 class BoundingBox:
     """
     Defines grid boundaries.
@@ -457,25 +941,93 @@ class Vec(list):
             v1[0] * v2[1] - v1[1] * v2[0],
         )
 
+# some custom maps
+maps = {"Empty10x10":  [[0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0]],
+                        
+        "Split":       [[0,0,0,0,0,1,1,0,0,0,0,0],
+                        [0,0,0,0,0,1,1,0,0,0,0,0],
+                        [0,0,0,0,0,1,1,0,0,0,0,0],
+                        [0,0,0,0,0,1,1,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,1,1,0,0,0,0,0],
+                        [0,0,0,0,0,1,1,0,0,0,0,0],
+                        [0,0,0,0,0,1,1,0,0,0,0,0],
+                        [0,0,0,0,0,1,1,0,0,0,0,0]],
+                        
+        "Hall":        [[0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0]],
+                        
+        "NarrowHall":  [[0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [1,0,0,0,0,1],
+                        [1,0,0,0,0,1],
+                        [1,0,0,0,0,1],
+                        [1,0,0,0,0,1],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0],
+                        [0,0,0,0,0,0]],
 
+        "BigL":        [[1,1,1,1,1,0,0,0,0,0],
+                        [1,1,1,1,1,0,0,0,0,0],
+                        [1,1,1,1,1,0,0,0,0,0],
+                        [1,1,1,1,1,0,0,0,0,0],
+                        [1,1,1,1,1,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0]],
 
-######################
-# TEST OF VISUALIZER
-######################
+        "Compact":     [[1,1,1,1,1,0,0,0,0,0],
+                        [1,1,1,1,1,0,0,0,0,0],
+                        [1,1,1,1,1,0,0,1,0,0],
+                        [1,1,1,1,1,0,0,0,0,0],
+                        [1,1,1,1,1,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,1,1,1,0,0,0,1,0,0],
+                        [0,1,1,1,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,1,1]],
 
-# empty 10x10 grid
-obstacles = [[0,0,0,0,0,0,0,0,0,0],
-             [0,0,0,0,0,0,0,0,0,0],
-             [0,0,0,0,0,0,0,0,0,0],
-             [0,0,0,0,0,0,0,0,0,0],
-             [0,0,0,0,0,0,0,0,0,0],
-             [0,0,0,0,0,0,0,0,0,0],
-             [0,0,0,0,0,0,0,0,0,0],
-             [0,0,0,0,0,0,0,0,0,0],
-             [0,0,0,0,0,0,0,0,0,0],
-             [0,0,0,0,0,0,0,0,0,0]]
+        "Big+":        [[1,1,1,0,0,0,0,1,1,1],
+                        [1,1,1,0,0,0,0,1,1,1],
+                        [1,1,1,0,0,0,0,1,1,1],
+                        [1,1,1,0,0,0,0,1,1,1],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [0,0,0,0,0,0,0,0,0,0],
+                        [1,1,1,0,0,0,0,1,1,1],
+                        [1,1,1,0,0,0,0,1,1,1],
+                        [1,1,1,0,0,0,0,1,1,1],
+                        [1,1,1,0,0,0,0,1,1,1]]}
 
-# 4 different furniture items
+# 6 different furniture items
 furnitures = [
     Furniture([[1,1]]),
     Furniture([[0,1],
@@ -486,28 +1038,45 @@ furnitures = [
     Furniture([[1,1],
                [1,0],
                [1,0],
-               [1,0]])]
+               [1,0]]),
+    Furniture([[1,1,1,1,1],
+               [1,1,1,1,1],
+               [1,1,0,0,1],
+               [1,1,0,0,0],
+               [1,1,0,0,0]]),
+    Furniture([[1,1,1,1,1,1,1]])
+]
 
-# random positions for each furniture
-rand_sol =[Pos.rand(len(obstacles), len(obstacles[0])) for _ in range(len(furnitures))]
+def run_all_maps(animate=False):
+    """
+    Runs all layouts in maps directory.
 
-visualize_solution(obstacles, furnitures, rand_sol)
+    Parameters:
+        animate (Bool):
+            if True, plot the best individual from certain generations as evolution progresses. (DEFAULT = False)
+    """
+    for name, layout in maps.items():
+        pop, fit, gen = fit_furniture(layout, furnitures, name, animate)
+        best_fit = min(fit)
+        best_ind = pop[fit[fit.index(best_fit)]]
+        plot_solution(layout, furnitures, best_ind, name, gen)
 
-######################
-# SHOWCASE OF ROTATION
-######################
-x = 3
-y = 4
-print(f"\n======================\nROTATION OF FURNITURE\nTop-Left Corner @ ({x},{y})")
+def run_map(name, animate=False):
+    """
+    Runs a specified layout from the maps directory.
+    
+    Parameters:
+        name (str):
+            the name key of the desired layout
+        animate (Bool):
+            if True, plot the best individual from certain generations as evolution progresses. (DEFAULT = False)
 
-# furniture is shaped:
-#     #  #  #  #  #
-#     #  .  .  .  .
-#     #  .  .  .  .
-furnitures = [Furniture([[1,1,1,1,1],
-                         [1,0,0,0,0],
-                         [1,0,0,0,0]])]
+    """
+    layout = maps[name]
+    pop, fit, gen = fit_furniture(layout, furnitures, name, animate)
+    best_fit = min(fit)
+    best_ind = pop[fit[fit.index(best_fit)]]
+    plot_solution(layout, furnitures, best_ind, name, gen)
 
-for rot in Pos.DIR:
-    print(f"\n{Pos.dir_to_str[rot]}")
-    visualize_solution(obstacles,furnitures,[Pos(x,y,rot)])
+#run_map("Empty10x10")
+run_all_maps()
