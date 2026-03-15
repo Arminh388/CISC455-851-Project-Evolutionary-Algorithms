@@ -8,7 +8,7 @@ import matplotlib
 import numpy as np
 from enum import Enum
 
-def fit_furniture(obstacles, furniture, map_name=None, animate=False):
+def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_reward=True):
     """
     Runs the Evolutionary Algorithm (EA). Plots the fitness trajectory of evolution.
 
@@ -22,6 +22,8 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False):
             the name of the map used, if chosen from the pre-made list. (DEFAULT = None)
         animate (Bool):
             if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
+        open_reward (Bool):
+            whether or not to add reward for adjacent empty cells. (DEFAULT = True)
             
     Returns:
         pop (list): 
@@ -51,14 +53,14 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False):
            for _ in range(POP_SIZE)]
     
     # calculate individual fitnesses
-    fitness = [eval_fit(obstacles, furniture, ind)[0] for ind in pop]
+    fitness = [eval_fit(obstacles, furniture, ind, open_reward)[0] for ind in pop]
 
     # ADD EA below
     for gen in range(GENERATION_COUNT):
         # mutation rates decrease with generations
         swap_chance = int(10*(1.01**gen))
         xy_sigma = 2*(0.999**gen)
-        rot_sigma = 0.999**gen
+        rot_sigma = 1*(0.999**gen)
 
         mating_pool = tournament(pop, fitness, MATING_POOL_SIZE, TOURNAMENT_SIZE)
         offspring = []
@@ -72,7 +74,7 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False):
             mutate(ind, swap_chance, xy_sigma, rot_sigma)
         
         # calculate offspring fitness
-        offspring_fitness = [eval_fit(obstacles, furniture, ind)[0] for ind in offspring]
+        offspring_fitness = [eval_fit(obstacles, furniture, ind, open_reward)[0] for ind in offspring]
 
 
         # replace population
@@ -96,10 +98,10 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False):
             # plot best & worst individual every <ANIMATE_CYCLE> generations
             if (gen)%ANIMATION_CYCLE == 0:
                 best_ind = pop[fitness.index(max(fitness))]
-                plot_solution(obstacles, furniture, best_ind, map_name, gen, "Best")
+                plot_solution(obstacles, furniture, best_ind, map_name, gen, "Best", open_reward)
 
                 worst_ind = pop[fitness.index(min(fitness))]
-                plot_solution(obstacles, furniture, worst_ind, map_name, gen, "Worst")
+                plot_solution(obstacles, furniture, worst_ind, map_name, gen, "Worst", open_reward)
     
     # plot fitness trajectories
     plt.figure()
@@ -111,7 +113,7 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False):
     plt.legend()
     title = ""
     if map_name != None:
-        title += f"{map_name}\n"
+        title += f"Map: {map_name}\n"
     title += "Average Fitness and Best Fitness of Each Generation"
     plt.title(title)
     plt.show()
@@ -154,7 +156,7 @@ def visualize_solution(obstacles, furniture, individual):
     footer_text = "┗  " + "  ".join(str(i) for i in range(w)) + "  ┛"
     print(footer_text)
 
-def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=None):
+def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=None, open_reward=True):
     """
     Method for visualizing grid with placed furniture.
     Author: ChatGPT
@@ -173,11 +175,13 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=
             the generation # of the current individual, for use in printing the plot title. Will read N/A if no generation # is input. (DEFAULT = -1)
         rank (str):
             the rank among the population of the individual being plotted. (DEFAULT = None)
+        open_reward (Bool):
+            whether or not to add reward for adjacent empty cells. (DEFAULT = True)
     """
     l = len(obstacles)
     w = len(obstacles[0])
 
-    fitness, gain, loss = eval_fit(obstacles, furniture, individual)
+    fitness, gain, loss = eval_fit(obstacles, furniture, individual, open_reward)
 
     grid = [[[] for _ in range(w)] for _ in range(l)]
     furn_cells = []
@@ -333,19 +337,21 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=
     ax.set_aspect("equal")
     title = ""
     if map_name != None:
-        title += f"{map_name}\n"
+        title += f"Map: {map_name}\n"
     title += f"Furniture Layout "
     if rank != None:
         title += rank + " Individual "
-    if gen >= 0:
-        title += f"| Generation: {gen}\nFitness: {fitness} | Gain: {gain} | Loss: {loss}"
-    else:
-        title += f"| Generation: N/A\nFitness: {fitness} | Gain: {gain} | Loss: {loss}"
+    if gen < 0:
+        gen = "N/A"
+    title += f"| Generation: {gen}\nFitness: {fitness} | Gain: {gain}"
+    if not open_reward:
+        title += " (Reward OFF)"
+    title += f" | Loss: {loss}"
     ax.set_title(title)
 
     plt.show()
 
-def eval_fit(obstacles, furniture, individual):
+def eval_fit(obstacles, furniture, individual, open_reward=True):
     """
     Calculates fitness of individuals in the population.
     Higher value => better fitness.
@@ -358,6 +364,8 @@ def eval_fit(obstacles, furniture, individual):
             a list of Furniture objects.
         individual (list):
             a potential solution represented by positions (Pos) for each Furniture object in the furniture parameter.
+        open_reward (Bool):
+            whether or not to add reward for adjacent empty cells. (DEFAULT = True)
 
     Returns:
         reward (float): 
@@ -392,15 +400,16 @@ def eval_fit(obstacles, furniture, individual):
     overlap = np.maximum(overlap - 1, 0)
     loss -= overlap.sum()
 
-    # calculate openness
-    empty = (occupancy == 0)
+    if open_reward:
+        # calculate openness
+        empty = (occupancy == 0)
 
-    gain = (
-        np.sum(empty[1:, :] & empty[:-1, :]) +
-        np.sum(empty[:-1, :] & empty[1:, :])
-    )
+        gain = (
+            np.sum(empty[1:, :] & empty[:-1, :]) +
+            np.sum(empty[:-1, :] & empty[1:, :])
+        )
 
-    gain *= OPEN_FACTOR
+        gain *= OPEN_FACTOR
 
     reward = loss + gain
     return reward, gain, loss
@@ -1111,46 +1120,120 @@ furnitures = [
     Furniture([[1,1,1,1,1,1,1]])
 ]
 
-def run_all_maps(animate=False):
+# tiling puzzle (goal: fill all spaces in layout, no overlap - our EA is not necessarily designed for this but can be applied!)
+tiling_maps = {"5x5": np.array(
+        [[0,0,0,0,0],
+         [0,0,0,0,0],
+         [0,0,0,0,0],
+         [0,0,0,0,0],
+         [0,0,0,0,0]]),
+               "Pentomino": np.array(
+        [[0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0],
+         [0,0,0,0,0,0,0,0,0,0]]
+               )}
+
+pieces_5x5 = [
+    Furniture([[1,1],
+               [1,0]]),
+    Furniture([[1,1],
+               [1,1]]),
+    Furniture([[1,1,1],
+               [0,1,1]]),
+    Furniture([[1,0,0,0],
+               [1,1,1,1]]),
+    Furniture([[1,1],
+               [0,1],
+               [0,1]]),
+    Furniture([[1,1,1,1]])
+]
+
+pieces_pentomino = [
+    Furniture([[0,1,0],
+               [1,1,1],
+               [0,0,1]]),
+    Furniture([[1,1,1,1,1]]),
+    Furniture([[1,1,1,1],
+               [1,0,0,0]]),
+    Furniture([[1,1,0,0,0],
+               [0,1,1,1,1]]),
+    Furniture([[1,1,1],
+               [0,1,1]]),
+    Furniture([[1,1,1],
+               [0,1,0],
+               [0,1,0]]),
+    Furniture([[1,0,1],
+               [1,1,1]]),
+    Furniture([[1,0,0],
+               [1,0,0],
+               [1,1,1]]),
+    Furniture([[1,0,0],
+               [1,1,0],
+               [0,1,1]]),
+    Furniture([[0,1,0],
+               [1,1,1],
+               [0,1,0]]),
+    Furniture([[0,0,1,0],
+               [1,1,1,1]]),
+    Furniture([[1,1,0],
+               [0,1,0],
+               [0,1,1]])
+]
+
+def run_all_maps(maps, furniture, animate=False, open_reward=True):
     """
-    Runs all layouts in maps directory.
+    Runs all layouts in a dictionary through the EA.
 
     Parameters:
+        maps (dict):
+            a dictionary of name (str) : layout (np.array) pair representing the maps to run through the EA.
+        furniture (list): 
+            a list of Furniture objects to be placed in each layout.
         animate (Bool):
             if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
+        open_reward (Bool):
+            whether or not to add reward for adjacent empty cells. (DEFAULT = True)
     """
     for name, layout in maps.items():
-        pop, fit, gen = fit_furniture(layout, furnitures, name, animate)
+        pop, fit, gen = fit_furniture(layout, furniture, name, animate, open_reward)
         best_fit = max(fit)
         worst_fit = min(fit)
         best_ind = pop[fit.index(best_fit)]
         worst_ind = pop[fit.index(worst_fit)]
-        plot_solution(layout, furnitures, best_ind, name, gen, "Best")
-        plot_solution(layout, furnitures, worst_ind, name, gen, "Worst")
+        plot_solution(layout, furniture, best_ind, name, gen, "Best", open_reward)
+        plot_solution(layout, furniture, worst_ind, name, gen, "Worst", open_reward)
 
-def run_map(name, animate=False):
+def run_map(maps, furniture, name, animate=False, open_reward=True):
     """
     Runs a specified layout from the maps directory.
     
     Parameters:
+        maps (dict):
+            a dictionary of name (str) : layout (np.array) pair representing the maps to run through the EA.
+        furniture (list): 
+            a list of Furniture objects to be placed in each layout.
         name (str):
             the name key of the desired layout
         animate (Bool):
             if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
-
+        open_reward (Bool):
+            whether or not to add reward for adjacent empty cells. (DEFAULT = True)
     """
     layout = maps[name]
-    pop, fit, gen = fit_furniture(layout, furnitures, name, animate)
+    pop, fit, gen = fit_furniture(layout, furniture, name, animate, open_reward)
     best_fit = max(fit)
     worst_fit = min(fit)
     best_ind = pop[fit.index(best_fit)]
     worst_ind = pop[fit.index(worst_fit)]
-    plot_solution(layout, furnitures, best_ind, name, gen, "Best")
-    plot_solution(layout, furnitures, worst_ind, name, gen, "Worst")
-
-
+    plot_solution(layout, furniture, best_ind, name, gen, "Best", open_reward)
+    plot_solution(layout, furniture, worst_ind, name, gen, "Worst", open_reward)
+ 
 ##########
 # OUTPUT #
 ##########
-run_map("BigX",True)
-#run_all_maps(False)
+#run_map(tiling_maps, pieces_pentomino, "Pentomino", animate=False, open_reward=False)
+#run_map(maps, furnitures,"Small", animate=True, open_reward=True)
+#run_all_maps(maps, furnitures, animate=False, open_reward=True)
