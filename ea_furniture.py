@@ -244,9 +244,9 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=
             max_overlap = max(max_overlap, overlap[y, x])
 
     fig, ax = plt.subplots(figsize=(7,7))
-
-    cmap = matplotlib.colormaps.get_cmap("tab20").resampled(len(furniture))
-    redmap = matplotlib.colormaps.get_cmap("Reds")
+    
+    cmap = plt.get_cmap("tab20", len(furniture))
+    redmap = plt.get_cmap("Reds")
 
     # lightly shade the border cells
     border_rect_north = patches.Rectangle(
@@ -391,6 +391,12 @@ def eval_fit(obstacles, furniture, individual, open_reward=True):
     loss = 0.0
     gain = 0.0
 
+    #Bonus for corners
+    corners = {(0,0),(w-1,0), (0, l-1), (w-1,l-1) }
+    corner_bonus_count = 4
+    corner_bonus = 2
+
+
     # calculate out-of-bounds penalty
     for i in range(n):
         pos = individual[i]
@@ -403,13 +409,19 @@ def eval_fit(obstacles, furniture, individual, open_reward=True):
     overlap = np.maximum(overlap - 1, 0)
     loss -= overlap.sum()
 
+    #add bonus for being in the corner
+    for(cx, cy) in corners:
+        if occupancy[cy][cx] > 0:
+            gain += corner_bonus
+
     if open_reward:
         # calculate openness
         empty = (occupancy == 0)
 
-        gain = (
-            np.sum(empty[1:, :] & empty[:-1, :]) +
-            np.sum(empty[:-1, :] & empty[1:, :])
+        #Calculate Open Space Reward with both vertical and horozontal adjacency 
+        gain += (
+            np.sum(empty[:,1 :] & empty[:, :-1]) + #horozontal 
+            np.sum(empty[1:, :] & empty[:-1, :]) #vertical
         )
 
         gain *= OPEN_FACTOR
