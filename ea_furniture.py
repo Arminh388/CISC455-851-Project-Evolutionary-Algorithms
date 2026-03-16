@@ -770,7 +770,15 @@ class Pos:
         DIR.CW0 : "0° Clockwise",
         DIR.CW90 : "90° Clockwise",
         DIR.CW180 : "180° Clockwise",
-        DIR.CW270 : "270° Clockwise"
+        DIR.CW270 : "270° Clockwise",
+        DIR.CCW0 : "0° Counter Clockwise",
+        DIR.CCW90 : "90° Counter Clockwise",
+        DIR.CCW180 : "180° Counter Clockwise",
+        DIR.CCW270 : "270° Counter Clockwise",
+        DIR.NORTH : "NORTH",
+        DIR.EAST : "EAST",
+        DIR.SOUTH : "SOUTH",
+        DIR.WEST : "WEST"
     }
 
     def __init__(self, x=0, y=0, rot=0):
