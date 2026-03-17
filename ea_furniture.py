@@ -181,16 +181,25 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=
         open_reward (Bool):
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
     """
+
     l = len(obstacles)
     w = len(obstacles[0])
 
-    fitness, gain, loss = eval_fit(obstacles, furniture, individual, open_reward)
+    fitness, gain, loss, oob, corners = eval_fit(obstacles, furniture, individual, open_reward)
+
+    BORDER = 4
+
+    xmin = -BORDER
+    xmax = w - 1 + BORDER
+    ymin = -BORDER
+    ymax = l - 1 + BORDER
 
     grid = [[[] for _ in range(w)] for _ in range(l)]
-    furn_cells = []
 
-    # track OOB furniture extension
-    oob = {}
+    # tracks furniture IDs in every visible cell (including OOB)
+    visible_cells = {}
+
+    furn_cells = []
 
     # obstacles
     for y in range(l):
@@ -200,156 +209,168 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=
 
     # project furniture
     for fid, furn in enumerate(furniture, start=1):
+
         pos = individual[fid-1]
         origin = pos.to_vec()
+
         cells = []
 
         for x in range(furn.w):
             for y in range(furn.l):
+
                 if furn.occupancy[y][x] == 0:
                     continue
 
                 rx, ry = furn.rotate(x, y, pos.rot)
+
                 gx = origin.x + rx
                 gy = origin.y + ry
 
-                # inside grid
+                # interior grid tracking
                 if 0 <= gx < w and 0 <= gy < l:
                     grid[gy][gx].append(fid)
+
+                # visible area tracking
+                if xmin <= gx <= xmax and ymin <= gy <= ymax:
+
                     cells.append((gx, gy))
 
-                else:
-                    # compute extension distance
-                    dist = max(
-                        -gx if gx < 0 else 0,
-                        gx - (w-1) if gx >= w else 0,
-                        -gy if gy < 0 else 0,
-                        gy - (l-1) if gy >= l else 0
-                    )
-                    # project to border cell
-                    bx = min(max(gx, -1), w)
-                    by = min(max(gy, -1), l)
-                    key = (bx, by)
-                    if key not in oob or dist > oob[key][1]:
-                        oob[key] = (fid, dist)
+                    key = (gx, gy)
+
+                    if key not in visible_cells:
+                        visible_cells[key] = [fid]
+                    else:
+                        visible_cells[key].append(fid)
 
         furn_cells.append((fid, cells))
 
-    # overlap tracking
-    overlap = np.zeros((l, w))
-    max_overlap = 1
+    cell_size = 0.6
+
+    fig_w = (xmax - xmin + 1) * cell_size
+    fig_h = (ymax - ymin + 1) * cell_size
+    fontsize = max(6, int(cell_size * 10))
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.1, top=0.8)
+
+    cmap = matplotlib.colormaps.get_cmap("tab20").resampled(len(furniture))
+
+    # shade entire extended area
+    ax.add_patch(
+        patches.Rectangle(
+            (xmin, ymin),
+            xmax-xmin+1,
+            ymax-ymin+1,
+            facecolor="black",
+            alpha=0.1,
+            zorder=0
+        )
+    )
+
+    # draw real map background
+    ax.add_patch(
+        patches.Rectangle(
+            (0,0),
+            w,
+            l,
+            facecolor="white",
+            zorder=1
+        )
+    )
+
+    # gridlines
+    for x in range(xmin, xmax+2):
+        ax.plot([x, x], [ymin, ymax+1], color="lightgray", linewidth=0.7)
+
+    for y in range(ymin, ymax+2):
+        ax.plot([xmin, xmax+1], [y, y], color="lightgray", linewidth=0.7)
+
+    # map boundary
+    ax.plot([0, w], [0, 0], color="black", linewidth=2)
+    ax.plot([0, w], [l, l], color="black", linewidth=2)
+    ax.plot([0, 0], [0, l], color="black", linewidth=2)
+    ax.plot([w, w], [0, l], color="black", linewidth=2)
+
+    # obstacles
     for y in range(l):
         for x in range(w):
-            overlap[y, x] = len(grid[y][x])
-            max_overlap = max(max_overlap, overlap[y, x])
 
-    fig, ax = plt.subplots(figsize=(7,7))
-    
-    cmap = plt.get_cmap("tab20", len(furniture))
-    redmap = plt.get_cmap("Reds")
-
-    # lightly shade the border cells
-    border_rect_north = patches.Rectangle(
-        (-1, -1), w+2, 1,
-        facecolor="black",
-        alpha=0.1,
-        zorder=0
-    )
-    border_rect_south = patches.Rectangle(
-        (-1, l), w+2, 1,
-        facecolor="black",
-        alpha=0.1,
-        zorder=0
-    )
-    border_rect_east = patches.Rectangle(
-        (w, 0), 1, l,
-        facecolor="black",
-        alpha=0.1,
-        zorder=0
-    )
-    border_rect_west = patches.Rectangle(
-        (-1, 0), 1, l,
-        facecolor="black",
-        alpha=0.1,
-        zorder=0
-    )
-    ax.add_patch(border_rect_north)
-    ax.add_patch(border_rect_south)
-    ax.add_patch(border_rect_east)
-    ax.add_patch(border_rect_west)
-
-    # draw gridlines
-    for x in range(-1, w+2):
-        ax.plot([x, x], [-1, l+1], color="lightgray")
-    for y in range(-1, l+2):
-        ax.plot([-1, w+1], [y, y], color="lightgray")
-
-    # thickened line around the actual grid boundary
-    ax.plot([0, w], [0, 0], color="black", linewidth=2)     # south
-    ax.plot([0, w], [l, l], color="black", linewidth=2)     # north
-    ax.plot([0, 0], [0, l], color="black", linewidth=2)     # west
-    ax.plot([w, w], [0, l], color="black", linewidth=2)     # east
-
-    # draw obstacles
-    for y in range(l):
-        for x in range(w):
             if obstacles[y][x] == 1:
-                rect = patches.Rectangle((x, y), 1, 1, facecolor="black", zorder=2)
+
+                rect = patches.Rectangle(
+                    (x,y),
+                    1,
+                    1,
+                    facecolor="black",
+                    alpha=0.6,
+                    zorder=4
+                )
+
                 ax.add_patch(rect)
 
     # draw furniture
     for fid, cells in furn_cells:
+
         color = cmap(fid-1)
-        for (x, y) in cells:
-            count = overlap[y, x]
-            face = redmap(count / max_overlap) if count > 1 else color
+
+        for (x,y) in cells:
+
             poly = patches.Polygon(
-                [(x, y), (x+1, y), (x+1, y+1), (x, y+1)],
-                facecolor=face, edgecolor="black", zorder=3
+                [(x,y),(x+1,y),(x+1,y+1),(x,y+1)],
+                facecolor=color,
+                edgecolor="black",
+                alpha=0.6,
+                zorder=3
             )
+
             ax.add_patch(poly)
 
-    # draw out-of-bounds cells
-    for (bx, by), (fid, dist) in oob.items():
-        color = cmap(fid-1)
-        rect = patches.Rectangle(
-            (bx, by), 1, 1, facecolor=color, edgecolor="black", alpha=0.6, zorder=1
-        )
-        ax.add_patch(rect)
+    # labels for ALL visible cells
+    for (x,y), ids in visible_cells.items():
+
+        label = ",".join(str(i) for i in ids)
+
+        text_color = "black"
+
+        if 0 <= x < w and 0 <= y < l:
+            if 0 in grid[y][x]:
+                text_color = "white"
+
         ax.text(
-            bx + 0.5, by + 0.5, str(dist),
-            ha="center", va="center", fontsize=9, color="black", fontweight="bold", zorder=4
+            x + 0.5,
+            y + 0.5,
+            label,
+            ha="center",
+            va="center",
+            fontsize=fontsize,
+            color=text_color,
+            zorder=5
         )
 
-    # label interior cells
-    for y in range(l):
-        for x in range(w):
-            if grid[y][x]:
-                label = ",".join(str(i) for i in grid[y][x])
-                if 0 in grid[y][x] or overlap[y, x] > 1:
-                    text_color = "white"
-                else:
-                    text_color = "black"
-                ax.text(
-                    x + 0.5, y + 0.5, label,
-                    ha="center", va="center", fontsize=8, color=text_color, zorder=4
-                )
-
-    ax.set_xlim(-1, w+1)
-    ax.set_ylim(l+1, -1)
+    ax.set_xlim(xmin, xmax+1)
+    ax.set_ylim(ymax+1, ymin)
     ax.set_aspect("equal")
+
     title = ""
-    if map_name != None:
+
+    if map_name is not None:
         title += f"Map: {map_name}\n"
-    title += f"Furniture Layout "
-    if rank != None:
+
+    title += "Furniture Layout "
+
+    if rank is not None:
         title += rank + " Individual "
+
     if gen < 0:
         gen = "N/A"
-    title += f"| Generation: {gen}\nFitness: {fitness} | Gain: {gain}"
+
+    title += f"| Generation: {gen}\nFitness: {fitness:.2f} | Gain: {gain:.2f}"
+
     if not open_reward:
-        title += " (Reward OFF)"
-    title += f" | Loss: {loss}"
+        title += " (Open Reward OFF)"
+
+    title += f" | Corner Count: {corners} | Loss: {loss:.2f} | OOB Count: {oob}"
+
     ax.set_title(title)
 
     plt.show()
@@ -377,7 +398,10 @@ def eval_fit(obstacles, furniture, individual, open_reward=True):
             OPEN_FACTOR * (# of unique pairs of adjacent empty cells).
         loss (float):
             (number of overlapping furniture/obstacles cells) + (OOB_PENALTY * (out-of-bounds furniture cells)).
-
+        total_oob (int):
+            the number of furniture-occupied out-of-bounds cells.
+        corners_occupied (int):
+            the number of corners occupied by furniture. Corners are only considered when not blocked by obstacles.
     """
     l = len(obstacles)
     w = len(obstacles[0])
@@ -400,34 +424,37 @@ def eval_fit(obstacles, furniture, individual, open_reward=True):
     # calculate out-of-bounds penalty
     for i in range(n):
         pos = individual[i]
-        loss -= furniture[i].project_to(overlap, pos)
-        furniture[i].project_to(occupancy, pos)
-
+        loss -= furniture[i].project_to(overlap, obstacles, pos)
+        furniture[i].project_to(occupancy, obstacles, pos)
+    total_oob = int(-loss)
     loss *= OOB_PENALTY
 
     # calculate overlap
     overlap = np.maximum(overlap - 1, 0)
     loss -= overlap.sum()
 
-    #add bonus for being in the corner
-    for(cx, cy) in corners:
-        if occupancy[cy][cx] > 0:
-            gain += corner_bonus
-
     if open_reward:
         # calculate openness
         empty = (occupancy == 0)
 
-        #Calculate Open Space Reward with both vertical and horozontal adjacency 
+        #Calculate Open Space Reward with both vertical and horizontal adjacency 
         gain += (
-            np.sum(empty[:,1 :] & empty[:, :-1]) + #horozontal 
+            np.sum(empty[:,1 :] & empty[:, :-1]) + #horizontal 
             np.sum(empty[1:, :] & empty[:-1, :]) #vertical
         )
 
         gain *= OPEN_FACTOR
 
+    #add bonus for being in the corner when corner is not blocked by obstacle
+    corners_occupied = 0
+    for(cx, cy) in corners:
+        if occupancy[cy][cx] > obstacles[cy][cx]:
+            gain += corner_bonus
+            corners_occupied += 1
+
     reward = loss + gain
-    return reward, gain, loss
+
+    return reward, gain, loss, total_oob, corners_occupied
 
 def mutate(individual, swap_chance=100, xy_sigma=0.5, rot_sigma=0.5):
     """
@@ -450,15 +477,16 @@ def mutate(individual, swap_chance=100, xy_sigma=0.5, rot_sigma=0.5):
     # swap mutations
     for p in range(n):
         if random.randint(0,swap_chance-1) == 0:
-            # get random index other than p. Do this by sampling uniformly from 0 to max_index - 1 (i.e. 0 to n-2)
-            sp = random.randint(0,n-2)
+            if n > 1:
+                # get random index other than p. Do this by sampling uniformly from 0 to max_index - 1 (i.e. 0 to n-2)
+                sp = random.randint(0,n-2)
 
-            # ensure all indices can be covered and p is excluded
-            if sp >= p:
-                sp += 1
+                # ensure all indices can be covered and p is excluded
+                if sp >= p:
+                    sp += 1
 
-            # perform swap
-            individual[p], individual[sp] = individual[sp], individual[p]
+                # perform swap
+                individual[p], individual[sp] = individual[sp], individual[p]
 
     # point mutations
     for pos in individual:
@@ -638,7 +666,7 @@ class Furniture:
     Parameters:
         occupancy (list): 
             a 2D list where inner lists represent the rows of the rectangle enclosing the furniture. 
-            Values of 1 in the rows indicate cells occupied by the furniture; values of 0 are cells that are unoccupied.
+            Values > 0 in the rows indicate how many furniture items occupy that cell; values of 0 are cells that are unoccupied.
 
     Attributes:
         occupancy (list): 
@@ -669,8 +697,7 @@ class Furniture:
 
         Returns:
             (tuple):
-                the rotated (x,y) coordinate
-        
+                the rotated (x,y) coordinate.
         """
 
         # rotation transformations
@@ -683,7 +710,7 @@ class Furniture:
 
         return ROT_MATRIX[rot](x,y)
 
-    def project_to(self, grid, pos):
+    def project_to(self, grid, obstacles, pos):
         """
         Projects the furniture object onto a grid.
 
@@ -693,17 +720,18 @@ class Furniture:
                 objects occupying the cell.
             pos (Pos):
                 the position to project the furniture object to.
+            obstacles (list):
+                a 2D list where inner lists represent rows in the gridspace.
+                Values of 0 are unoccupied cells, values of 1 are cells occupied by obstacles.
 
         Returns:
             oob (int):
                 the number of cells occupied by the furniture that fall out-of-bounds.
-        
         """
 
         l = len(grid)
         w = len(grid[0])
 
-        bounds = BoundingBox(Vec(0, 0), Vec(w-1, l-1))
         origin = pos.to_vec()
 
         oob = 0
@@ -716,10 +744,12 @@ class Furniture:
                 offset = Vec(rx, ry)
                 offset.add(origin)
 
-                if bounds.point_in_bounds(offset):
-                    grid[offset.y][offset.x] += self.occupancy[y][x]
+                if (not(0 <= offset.x <= w-1)) or (not(0 <= offset.y <= l-1)) or (obstacles[offset.y][offset.x] == 1):
+                    # if the (x,y) coordinate is out-of-bounds or an obstacle space, increment oob
+                    oob += self.occupancy[y][x] 
                 else:
-                    oob += self.occupancy[y][x]
+                    # update occupancy for in-bounds (x,y) coordinate
+                    grid[offset.y][offset.x] += self.occupancy[y][x]
 
         return oob
 
@@ -846,7 +876,7 @@ class Pos:
 
 class BoundingBox:
     """
-    Defines grid boundaries.
+    Defines grid boundaries. Currently not used.
 
     Parameters:
         v1 (Vec):
@@ -1258,5 +1288,5 @@ def run_map(maps, furniture, name, animate=False, open_reward=True):
 # OUTPUT #
 ##########
 #run_map(tiling_maps, pieces_pentomino, "Pentomino", animate=False, open_reward=False)
-#run_map(maps, furnitures,"Small", animate=True, open_reward=True)
+run_map(maps, furnitures,"Compact", animate=True, open_reward=True)
 #run_all_maps(maps, furnitures, animate=False, open_reward=True)
