@@ -8,7 +8,7 @@ import matplotlib
 import numpy as np
 from enum import Enum
 
-def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_reward=True):
+def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_reward=True, corner_reward=True):
     """
     Runs the Evolutionary Algorithm (EA). Plots the fitness trajectory of evolution.
 
@@ -24,6 +24,8 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
             if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
         open_reward (Bool):
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
+        corner_reward (Bool):
+            whether or not to add reward for furniture-occupied corner cells. (DEFAULT = True)
             
     Returns:
         pop (list): 
@@ -45,7 +47,7 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
     SWAP_SCALE = 10       # lower = higher mutation rate
     XY_SCALE = 2          # higher = higher mutation rate
     ROT_SCALE = 1         # higher = higher mutation rate
-    ANIMATION_CYCLE = 100 # plot best individual ever <ANIMATION_CYCLE> generations
+    ANIMATION_CYCLE = 100 # plot best individual every <ANIMATION_CYCLE> generations
 
     best_fits = []
     avg_fits = []
@@ -56,7 +58,7 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
            for _ in range(POP_SIZE)]
     
     # calculate individual fitnesses
-    fitness = [eval_fit(obstacles, furniture, ind, open_reward)[0] for ind in pop]
+    fitness = [eval_fit(obstacles, furniture, ind, open_reward, corner_reward)[0] for ind in pop]
 
     # ADD EA below
     for gen in range(GENERATION_COUNT):
@@ -77,7 +79,7 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
             mutate(ind, swap_chance, xy_sigma, rot_sigma)
         
         # calculate offspring fitness
-        offspring_fitness = [eval_fit(obstacles, furniture, ind, open_reward)[0] for ind in offspring]
+        offspring_fitness = [eval_fit(obstacles, furniture, ind, open_reward, corner_reward)[0] for ind in offspring]
 
 
         # replace population
@@ -101,10 +103,10 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
             # plot best & worst individual every <ANIMATE_CYCLE> generations
             if (gen)%ANIMATION_CYCLE == 0:
                 best_ind = pop[fitness.index(max(fitness))]
-                plot_solution(obstacles, furniture, best_ind, map_name, gen, "Best", open_reward)
+                plot_solution(obstacles, furniture, best_ind, map_name, gen, "Best", open_reward, corner_reward)
 
                 worst_ind = pop[fitness.index(min(fitness))]
-                plot_solution(obstacles, furniture, worst_ind, map_name, gen, "Worst", open_reward)
+                plot_solution(obstacles, furniture, worst_ind, map_name, gen, "Worst", open_reward, corner_reward)
     
     # plot fitness trajectories
     plt.figure()
@@ -159,7 +161,7 @@ def visualize_solution(obstacles, furniture, individual):
     footer_text = "┗  " + "  ".join(str(i) for i in range(w)) + "  ┛"
     print(footer_text)
 
-def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=None, open_reward=True):
+def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=None, open_reward=True, corner_reward=True):
     """
     Method for visualizing grid with placed furniture.
     Author: ChatGPT
@@ -180,12 +182,14 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=
             the rank among the population of the individual being plotted. (DEFAULT = None)
         open_reward (Bool):
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
+        corner_reward (Bool):
+            whether or not to add reward for furniture-occupied corner cells. (DEFAULT = True)
     """
 
     l = len(obstacles)
     w = len(obstacles[0])
 
-    fitness, gain, loss, oob, corners = eval_fit(obstacles, furniture, individual, open_reward)
+    fitness, gain, loss, oob, corners = eval_fit(obstacles, furniture, individual, open_reward, corner_reward)
 
     BORDER = 4
 
@@ -356,26 +360,35 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=
     if map_name is not None:
         title += f"Map: {map_name}\n"
 
-    title += "Furniture Layout "
+    title += "Furniture Layout"
 
     if rank is not None:
-        title += rank + " Individual "
+        title += " | " + rank + " Individual "
 
     if gen < 0:
         gen = "N/A"
 
-    title += f"| Generation: {gen}\nFitness: {fitness:.2f} | Gain: {gain:.2f}"
+    title += f"| Generation: {gen}\nFitness: {fitness:.2f} | Gain: {gain:.2f} | Loss: {loss:.2f}"
+
+    title += f"\nOOB Count: {oob}"
+
+    if corner_reward:
+        title += f" | Corner Count: {corners}"
+
+    if not open_reward or not corner_reward:
+        title += "\n"
 
     if not open_reward:
-        title += " (Open Reward OFF)"
+        title += "(Open Reward OFF)"
 
-    title += f" | Corner Count: {corners} | Loss: {loss:.2f} | OOB Count: {oob}"
+    if not corner_reward:
+        title += " | (Corner Reward OFF)"
 
     ax.set_title(title)
 
     plt.show()
 
-def eval_fit(obstacles, furniture, individual, open_reward=True):
+def eval_fit(obstacles, furniture, individual, open_reward=True, corner_reward=True):
     """
     Calculates fitness of individuals in the population.
     Higher value => better fitness.
@@ -390,6 +403,8 @@ def eval_fit(obstacles, furniture, individual, open_reward=True):
             a potential solution represented by positions (Pos) for each Furniture object in the furniture parameter.
         open_reward (Bool):
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
+        corner_reward (Bool):
+            whether or not to add reward for furniture-occupied corner cells. (DEFAULT = True)
 
     Returns:
         reward (float): 
@@ -444,13 +459,14 @@ def eval_fit(obstacles, furniture, individual, open_reward=True):
         )
 
         gain *= OPEN_FACTOR
-
-    #add bonus for being in the corner when corner is not blocked by obstacle
+    
     corners_occupied = 0
-    for(cx, cy) in corners:
-        if occupancy[cy][cx] > obstacles[cy][cx]:
-            gain += corner_bonus
-            corners_occupied += 1
+    if corner_reward:
+        #add bonus for being in the corner when corner is not blocked by obstacle
+        for(cx, cy) in corners:
+            if occupancy[cy][cx] > obstacles[cy][cx]:
+                gain += corner_bonus
+                corners_occupied += 1
 
     reward = loss + gain
 
@@ -671,7 +687,7 @@ class Furniture:
     Attributes:
         occupancy (list): 
             a 2D list where inner lists represent the rows of the rectangle enclosing the furniture. 
-            Values of 1 in the rows indicate cellsoccupied by the furniture; values of 0 are cells that are unoccupied.
+            Values of 1 in the rows indicate cells occupied by the furniture; values of 0 are cells that are unoccupied.
         l (int): 
             length (y) of rectangle enclosing furniture.
         w (int): 
@@ -1236,7 +1252,7 @@ pieces_pentomino = [
                [0,1,1]])
 ]
 
-def run_all_maps(maps, furniture, animate=False, open_reward=True):
+def run_all_maps(maps, furniture, animate=False, open_reward=True, corner_reward=True):
     """
     Runs all layouts in a dictionary through the EA.
 
@@ -1249,17 +1265,19 @@ def run_all_maps(maps, furniture, animate=False, open_reward=True):
             if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
         open_reward (Bool):
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
+        corner_reward (Bool):
+            whether or not to add reward for furniture-occupied corner cells. (DEFAULT = True)
     """
     for name, layout in maps.items():
-        pop, fit, gen = fit_furniture(layout, furniture, name, animate, open_reward)
+        pop, fit, gen = fit_furniture(layout, furniture, name, animate, open_reward, corner_reward)
         best_fit = max(fit)
         worst_fit = min(fit)
         best_ind = pop[fit.index(best_fit)]
         worst_ind = pop[fit.index(worst_fit)]
-        plot_solution(layout, furniture, best_ind, name, gen, "Best", open_reward)
-        plot_solution(layout, furniture, worst_ind, name, gen, "Worst", open_reward)
+        plot_solution(layout, furniture, best_ind, name, gen, "Best", open_reward, corner_reward)
+        plot_solution(layout, furniture, worst_ind, name, gen, "Worst", open_reward, corner_reward)
 
-def run_map(maps, furniture, name, animate=False, open_reward=True):
+def run_map(maps, furniture, name, animate=False, open_reward=True, corner_reward=True):
     """
     Runs a specified layout from the maps directory.
     
@@ -1274,19 +1292,21 @@ def run_map(maps, furniture, name, animate=False, open_reward=True):
             if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
         open_reward (Bool):
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
+        corner_reward (Bool):
+            whether or not to add reward for furniture-occupied corner cells. (DEFAULT = True)
     """
     layout = maps[name]
-    pop, fit, gen = fit_furniture(layout, furniture, name, animate, open_reward)
+    pop, fit, gen = fit_furniture(layout, furniture, name, animate, open_reward, corner_reward)
     best_fit = max(fit)
     worst_fit = min(fit)
     best_ind = pop[fit.index(best_fit)]
     worst_ind = pop[fit.index(worst_fit)]
-    plot_solution(layout, furniture, best_ind, name, gen, "Best", open_reward)
-    plot_solution(layout, furniture, worst_ind, name, gen, "Worst", open_reward)
+    plot_solution(layout, furniture, best_ind, name, gen, "Best", open_reward, corner_reward)
+    plot_solution(layout, furniture, worst_ind, name, gen, "Worst", open_reward, corner_reward)
  
 ##########
 # OUTPUT #
 ##########
-#run_map(tiling_maps, pieces_pentomino, "Pentomino", animate=False, open_reward=False)
-run_map(maps, furnitures,"Compact", animate=True, open_reward=True)
+#run_map(tiling_maps, pieces_pentomino, "Pentomino", animate=False, open_reward=False, corner_reward=False)
+#run_map(maps, furnitures,"Compact", animate=True, open_reward=True)
 #run_all_maps(maps, furnitures, animate=False, open_reward=True)
