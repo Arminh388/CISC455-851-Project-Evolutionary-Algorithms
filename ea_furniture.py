@@ -88,7 +88,7 @@ def fit_furniture(obstacles, furniture, map_name=None, fit_thresh=np.inf, animat
 
         if not const_mut:
             # mutation rates decrease with generations
-            swap_chance = int(SWAP_SCALE*((1-MUTATION_CHANGE)**gen))
+            swap_chance = int(SWAP_SCALE*((2-MUTATION_CHANGE)**gen))
             xy_sigma = XY_SCALE*(MUTATION_CHANGE**gen)
             rot_sigma = ROT_SCALE*(MUTATION_CHANGE**gen)
 
