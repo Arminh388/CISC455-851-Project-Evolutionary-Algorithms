@@ -8,7 +8,7 @@ import matplotlib
 import numpy as np
 from enum import Enum
 
-def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_reward=True, corner_reward=True):
+def fit_furniture(obstacles, furniture, map_name=None, fit_thresh=np.inf, animate=False, open_reward=True, corner_reward=True, coverage_reward=False, reprod_fit=False, const_mut=True, immigration=True):
     """
     Runs the Evolutionary Algorithm (EA). Plots the fitness trajectory of evolution.
 
@@ -20,12 +20,24 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
             a list of Furniture objects.
         map_name (str):
             the name of the map used, if chosen from the pre-made list. (DEFAULT = None)
+        fit_thresh (float):
+            a fitness threshold to stop generations when the best member has fitness >= this value. 
+            Default is infinity, meaning runs will always go until the GENERATION_COUNT. (DEFAULT = np.inf)
         animate (Bool):
             if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
         open_reward (Bool):
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
         corner_reward (Bool):
             whether or not to add reward for furniture-occupied corner cells. (DEFAULT = True)
+        coverage_reward (Bool):
+            whether or not to add reward for furniture-occupied cells. (DEFAULT = False)
+        reprod_fit (Bool):
+            reproductive fitness. whether the offspring's chance to inherit a trait from each parent is proportional that parent's fitness. 
+            If False, chance will be 50/50 (DEFAULT=False)
+        const_mut (Bool):
+            whether mutation rates remain constant throughout evolution. Rates will decrease with generations if set to False. (DEFAULT = True)
+        immigration (Bool):
+            whether randomly generated individuals should be added (with replacement) to the population at set intervals. (DEFAULT = True)
             
     Returns:
         pop (list): 
@@ -41,46 +53,72 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
     n = len(furniture)
 
     POP_SIZE = 1000
-    MATING_POOL_SIZE = 100
-    TOURNAMENT_SIZE = 10
+    MATING_POOL_SIZE = 250
+    TOURNAMENT_SIZE = 4
     GENERATION_COUNT = 1000
-    SWAP_SCALE = 10       # lower = higher mutation rate
-    XY_SCALE = 2          # higher = higher mutation rate
-    ROT_SCALE = 1         # higher = higher mutation rate
-    ANIMATION_CYCLE = 100 # plot best individual every <ANIMATION_CYCLE> generations
+    SWAP_SCALE = 50             # lower = higher mutation rate
+    XY_SCALE = 1                # higher = higher mutation rate
+    ROT_SCALE = 1               # higher = higher mutation rate
+    ANIMATION_CYCLE = 100       # plot best individual every <ANIMATION_CYCLE> generations
+    IMMIGRANT_POP_SIZE = 50     # add this many immigrants every immigration cycle
+    IMMIGRATION_CYCLE = 50      # introduce random individuals every <IMMIGRATION_CYCLE> generations
+    MUTATION_CHANGE = 0.999     # should lie on the interval (0,1]. Smaller value means mutation rate depreciates faster
 
     best_fits = []
     avg_fits = []
     worst_fits = []
+    mut_rates = []
+
+    swap_chance = SWAP_SCALE
+    xy_sigma = XY_SCALE
+    rot_sigma = ROT_SCALE
 
     # individuals are lists of positions for each furniture
     pop = [[Pos.rand(l, w) for _ in range(n)]
            for _ in range(POP_SIZE)]
     
     # calculate individual fitnesses
-    fitness = [eval_fit(obstacles, furniture, ind, open_reward, corner_reward)[0] for ind in pop]
+    fitness = [eval_fit(obstacles, furniture, ind, open_reward, corner_reward, coverage_reward)[0] for ind in pop]
+    
+    gen = 0
+    best_fit = -np.inf
 
-    # ADD EA below
-    for gen in range(GENERATION_COUNT):
-        # mutation rates decrease with generations
-        swap_chance = int(SWAP_SCALE*(1.01**gen))
-        xy_sigma = XY_SCALE*(0.999**gen)
-        rot_sigma = ROT_SCALE*(0.999**gen)
+    # run EA
+    while (gen < GENERATION_COUNT + 1) and (best_fit < fit_thresh):
 
+        if not const_mut:
+            # mutation rates decrease with generations
+            swap_chance = int(SWAP_SCALE*((1-MUTATION_CHANGE)**gen))
+            xy_sigma = XY_SCALE*(MUTATION_CHANGE**gen)
+            rot_sigma = ROT_SCALE*(MUTATION_CHANGE**gen)
+
+        # get mating pairs
         mating_pool = tournament(pop, fitness, MATING_POOL_SIZE, TOURNAMENT_SIZE)
-        offspring = []
 
         # generate offspring from each mating pair
-        for p1, p2 in mating_pool:
-            offspring.append(crossover(p1, p2))
-
+        offspring = []
+        worst_fit = min(fitness)
+        for p1, p2, p1_fit, p2_fit in mating_pool:
+            p1_window = p1_fit - worst_fit
+            p2_window = p2_fit - worst_fit
+            offspring.append(crossover(p1, p1_window, p2, p2_window, reprod_fit))
+        
         # mutate offspring
         for ind in offspring:
             mutate(ind, swap_chance, xy_sigma, rot_sigma)
         
         # calculate offspring fitness
-        offspring_fitness = [eval_fit(obstacles, furniture, ind, open_reward, corner_reward)[0] for ind in offspring]
+        offspring_fitness = [eval_fit(obstacles, furniture, ind, open_reward, corner_reward, coverage_reward)[0] 
+                             for ind in offspring]
 
+        if immigration:
+            # create random immigrants, add them to offspring pool
+            if gen % IMMIGRATION_CYCLE == 0:
+                immigrants = [[Pos.rand(l,w) for _ in range(n)] 
+                            for _ in range(IMMIGRANT_POP_SIZE)]
+                immigrant_fitness = [eval_fit(obstacles, furniture, ind, open_reward, corner_reward, coverage_reward)[0] for ind in immigrants]
+                offspring += immigrants
+                offspring_fitness += immigrant_fitness
 
         # replace population
         pop, fitness = replacement(pop, fitness, offspring, offspring_fitness)
@@ -92,6 +130,7 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
         best_fits.append(best_fit)
         worst_fits.append(worst_fit)
         avg_fits.append(avg_fit)
+        mut_rates.append(xy_sigma)
 
         # print stats
         print(f"====================\nGeneration {gen}\n====================")
@@ -101,12 +140,14 @@ def fit_furniture(obstacles, furniture, map_name=None, animate=False, open_rewar
 
         if animate:
             # plot best & worst individual every <ANIMATE_CYCLE> generations
-            if (gen)%ANIMATION_CYCLE == 0:
+            if gen % ANIMATION_CYCLE == 0:
                 best_ind = pop[fitness.index(max(fitness))]
-                plot_solution(obstacles, furniture, best_ind, map_name, gen, "Best", open_reward, corner_reward)
+                plot_solution(obstacles, furniture, best_ind, map_name, gen, "Best", open_reward, corner_reward, coverage_reward)
 
                 worst_ind = pop[fitness.index(min(fitness))]
-                plot_solution(obstacles, furniture, worst_ind, map_name, gen, "Worst", open_reward, corner_reward)
+                plot_solution(obstacles, furniture, worst_ind, map_name, gen, "Worst", open_reward, corner_reward, coverage_reward)
+        
+        gen += 1
     
     # plot fitness trajectories
     plt.figure()
@@ -161,7 +202,7 @@ def visualize_solution(obstacles, furniture, individual):
     footer_text = "┗  " + "  ".join(str(i) for i in range(w)) + "  ┛"
     print(footer_text)
 
-def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=None, open_reward=True, corner_reward=True):
+def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=None, open_reward=True, corner_reward=True, coverage_reward=False):
     """
     Method for visualizing grid with placed furniture.
     Author: ChatGPT
@@ -184,12 +225,14 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
         corner_reward (Bool):
             whether or not to add reward for furniture-occupied corner cells. (DEFAULT = True)
+        coverage_reward (Bool):
+            whether or not to add reward for furniture-occupied cells. (DEFAULT = False)
     """
 
     l = len(obstacles)
     w = len(obstacles[0])
 
-    fitness, gain, loss, oob, corners = eval_fit(obstacles, furniture, individual, open_reward, corner_reward)
+    fitness, gain, loss, oob, corners = eval_fit(obstacles, furniture, individual, open_reward, corner_reward, coverage_reward)
 
     BORDER = 4
 
@@ -388,7 +431,7 @@ def plot_solution(obstacles, furniture, individual, map_name=None, gen=-1, rank=
 
     plt.show()
 
-def eval_fit(obstacles, furniture, individual, open_reward=True, corner_reward=True):
+def eval_fit(obstacles, furniture, individual, open_reward=True, corner_reward=True, coverage_reward=False):
     """
     Calculates fitness of individuals in the population.
     Higher value => better fitness.
@@ -405,6 +448,8 @@ def eval_fit(obstacles, furniture, individual, open_reward=True, corner_reward=T
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
         corner_reward (Bool):
             whether or not to add reward for furniture-occupied corner cells. (DEFAULT = True)
+        coverage_reward (Bool):
+            whether or not to add reward for furniture-occupied cells. (DEFAULT = False)
 
     Returns:
         reward (float): 
@@ -424,14 +469,14 @@ def eval_fit(obstacles, furniture, individual, open_reward=True, corner_reward=T
 
     OOB_PENALTY = 3
     OPEN_FACTOR = 0.05 # should be much lower than 1
+    COVERAGE_REWARD = 3
 
-    overlap = copy.deepcopy(obstacles)
-    occupancy = copy.deepcopy(obstacles)
+    occupancy = obstacles.copy()
     loss = 0.0
     gain = 0.0
 
     #Bonus for corners
-    corners = {(0,0),(w-1,0), (0, l-1), (w-1,l-1) }
+    corners = {(0,0),(w-1,0), (0, l-1), (w-1,l-1)}
     corner_bonus_count = 4
     corner_bonus = 2
 
@@ -439,18 +484,18 @@ def eval_fit(obstacles, furniture, individual, open_reward=True, corner_reward=T
     # calculate out-of-bounds penalty
     for i in range(n):
         pos = individual[i]
-        loss -= furniture[i].project_to(overlap, obstacles, pos)
-        furniture[i].project_to(occupancy, obstacles, pos)
+        loss -= furniture[i].project_to(obstacles, occupancy, pos)
     total_oob = int(-loss)
     loss *= OOB_PENALTY
 
     # calculate overlap
-    overlap = np.maximum(overlap - 1, 0)
+    overlap = np.maximum(occupancy - 1, 0)
     loss -= overlap.sum()
+
+    empty = (occupancy == 0)
 
     if open_reward:
         # calculate openness
-        empty = (occupancy == 0)
 
         #Calculate Open Space Reward with both vertical and horizontal adjacency 
         gain += (
@@ -467,6 +512,9 @@ def eval_fit(obstacles, furniture, individual, open_reward=True, corner_reward=T
             if occupancy[cy][cx] > obstacles[cy][cx]:
                 gain += corner_bonus
                 corners_occupied += 1
+    
+    if coverage_reward:
+        gain += COVERAGE_REWARD * np.count_nonzero(occupancy)
 
     reward = loss + gain
 
@@ -492,6 +540,7 @@ def mutate(individual, swap_chance=100, xy_sigma=0.5, rot_sigma=0.5):
 
     # swap mutations
     for p in range(n):
+        swap_chance = max(swap_chance,1)
         if random.randint(0,swap_chance-1) == 0:
             if n > 1:
                 # get random index other than p. Do this by sampling uniformly from 0 to max_index - 1 (i.e. 0 to n-2)
@@ -524,16 +573,23 @@ def mutate(individual, swap_chance=100, xy_sigma=0.5, rot_sigma=0.5):
         pos.set_y(mut_y)
         pos.set_rot(mut_rot)
 
-def crossover(parent1, parent2):
+def crossover(parent1, parent1_fit_window, parent2, parent2_fit_window, reprod_fit=False):
     """
-    Produces child from 2 parents.
+    Produces child from 2 parents. Can employ fitness-proportionate inheritance using fitness windows to mitigate scaling effects.
 
     Paremeters:
         parent1 (list):
             an individual of the population represented by positions (Pos) for each Furniture object.
+        parent1_fit_window (int):
+            fitness window of parent1.
         parent2 (list):
             an individual of the population represented by positions (Pos) for each Furniture object.
-
+        parent2_fit_window (int):
+            fitness window of parent2.
+        reprod_fit (Bool):
+            reproductive fitness. whether the offspring's chance to inherit a trait from each parent is proportional that parent's fitness window.
+            If False, chance will be 50/50 (DEFAULT=False)
+            
     Returns:
         child (list):
             an individual produced by crossover of 2 parent individuals, represented by positions (Pos) for each Furniture object.
@@ -547,8 +603,17 @@ def crossover(parent1, parent2):
         p2_pos = parent2[i].to_tuple()
 
         for j in range(len(p2_pos)):
-            # 50/50 to use each attribute of parent2
-            use_p2 = random.choice([True,False])
+            if reprod_fit:
+                use_p2 = False
+                # determine chance to use parent2's trait
+                if parent2_fit_window > 0:
+                    p2_ratio = parent2_fit_window/(parent1_fit_window + parent2_fit_window)
+                    if random.random() < p2_ratio:
+                        use_p2 = True
+            else:
+                # 50/50 to use each attribute of parent2
+                use_p2 = random.choice([True,False])
+
             if use_p2:
                 # get the attribute of parent2's to use (i.e. x, y or rotation)
                 att = p2_pos[j]
@@ -582,7 +647,7 @@ def tournament(pop, fitness, mating_pool_size, tournament_size):
 
     Returns:
         selected_to_mate (list):
-            a list of individuals selected for mating.
+            a list of tuples representing individuals selected for mating and their fitnesses.
     """
 
     selected_to_mate = []
@@ -609,7 +674,7 @@ def tournament(pop, fitness, mating_pool_size, tournament_size):
                 # update 2nd place
                 second = tournament_indices[i]
 
-        selected_to_mate.append((pop[first], pop[second]))
+        selected_to_mate.append((pop[first], pop[second], fitness[first], fitness[second]))
 
     return selected_to_mate
 
@@ -669,9 +734,11 @@ def replacement(pop, fitness, offspring, offspring_fitness):
     k = len(pop) - len(offspring)
 
     # replace worst members of population with offspring
-    for i in range(len(offspring)):
-        new_pop[k+i] = offspring[i]
-        new_fitness[k+i] = offspring_fitness[i]
+    new_pop[k:] = offspring
+    new_fitness[k:] = offspring_fitness
+
+    #random.shuffle(new_pop)
+    #random.shuffle(new_fitness)
 
     return new_pop, new_fitness
 
@@ -726,27 +793,28 @@ class Furniture:
 
         return ROT_MATRIX[rot](x,y)
 
-    def project_to(self, grid, obstacles, pos):
+    def project_to(self, obstacles, grid_occupancy, pos):
         """
-        Projects the furniture object onto a grid.
+        Projects the furniture object onto a grid, updating the occupancy and overlap values.
 
         Parameters:
-            grid (list):
-                a 2D list where inner lists represent rows of the grid. Values in the grid represent the number of furniture
-                objects occupying the cell.
-            pos (Pos):
-                the position to project the furniture object to.
             obstacles (list):
                 a 2D list where inner lists represent rows in the gridspace.
                 Values of 0 are unoccupied cells, values of 1 are cells occupied by obstacles.
+            grid_occupancy (list):
+                same shape as obstacles, where values in the grid represent the number of furniture objects occupying the cell.
+            overlap (list):
+                same shape as obstacles, where values in the grid represent the number of overlaps of furniture and obstacles in the cell.
+            pos (Pos):
+                the position to project the furniture object to.
 
         Returns:
             oob (int):
                 the number of cells occupied by the furniture that fall out-of-bounds.
         """
 
-        l = len(grid)
-        w = len(grid[0])
+        l = len(grid_occupancy)
+        w = len(grid_occupancy[0])
 
         origin = pos.to_vec()
 
@@ -765,7 +833,7 @@ class Furniture:
                     oob += self.occupancy[y][x] 
                 else:
                     # update occupancy for in-bounds (x,y) coordinate
-                    grid[offset.y][offset.x] += self.occupancy[y][x]
+                    grid_occupancy[offset.y][offset.x] += self.occupancy[y][x]
 
         return oob
 
@@ -1252,7 +1320,7 @@ pieces_pentomino = [
                [0,1,1]])
 ]
 
-def run_all_maps(maps, furniture, animate=False, open_reward=True, corner_reward=True):
+def run_all_maps(maps, furniture, fit_thresh=np.inf, animate=False, open_reward=True, corner_reward=True, coverage_reward=False, reprod_fit=False, const_mut=True, immigration=True):
     """
     Runs all layouts in a dictionary through the EA.
 
@@ -1261,23 +1329,35 @@ def run_all_maps(maps, furniture, animate=False, open_reward=True, corner_reward
             a dictionary of name (str) : layout (np.array) pair representing the maps to run through the EA.
         furniture (list): 
             a list of Furniture objects to be placed in each layout.
+        fit_thresh (float):
+            a fitness threshold to stop generations when the best member has fitness >= this value. 
+            Default is infinity, meaning runs will always go until the GENERATION_COUNT. (DEFAULT = np.inf)
         animate (Bool):
             if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
         open_reward (Bool):
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
         corner_reward (Bool):
             whether or not to add reward for furniture-occupied corner cells. (DEFAULT = True)
+        coverage_reward (Bool):
+            whether or not to add reward for furniture-occupied cells. (DEFAULT = False)
+        reprod_fit (Bool):
+            reproductive fitness. whether the offspring's chance to inherit a trait from each parent is proportional that parent's fitness.
+            If False, chance will be 50/50 (DEFAULT=False)
+        const_mut (Bool):
+            whether mutation rates remain constant throughout evolution. Rates will decrease with generations if set to False. (DEFAULT = True)
+        immigration (Bool):
+            whether randomly generated individuals should be added (with replacement) to the population at set intervals. (DEFAULT = True)
     """
     for name, layout in maps.items():
-        pop, fit, gen = fit_furniture(layout, furniture, name, animate, open_reward, corner_reward)
+        pop, fit, gen = fit_furniture(layout, furniture, name, fit_thresh, animate, open_reward, corner_reward, coverage_reward, reprod_fit, const_mut, immigration)
         best_fit = max(fit)
         worst_fit = min(fit)
         best_ind = pop[fit.index(best_fit)]
         worst_ind = pop[fit.index(worst_fit)]
-        plot_solution(layout, furniture, best_ind, name, gen, "Best", open_reward, corner_reward)
-        plot_solution(layout, furniture, worst_ind, name, gen, "Worst", open_reward, corner_reward)
+        plot_solution(layout, furniture, best_ind, name, gen, "Best", open_reward, corner_reward, coverage_reward)
+        plot_solution(layout, furniture, worst_ind, name, gen, "Worst", open_reward, corner_reward, coverage_reward)
 
-def run_map(maps, furniture, name, animate=False, open_reward=True, corner_reward=True):
+def run_map(maps, furniture, name, fit_thresh=np.inf, animate=False, open_reward=True, corner_reward=True, coverage_reward=False, reprod_fit=False, const_mut=True, immigration=True):
     """
     Runs a specified layout from the maps directory.
     
@@ -1287,26 +1367,38 @@ def run_map(maps, furniture, name, animate=False, open_reward=True, corner_rewar
         furniture (list): 
             a list of Furniture objects to be placed in each layout.
         name (str):
-            the name key of the desired layout
+            the name key of the desired layout.
+        fit_thresh (float):
+            a fitness threshold to stop generations when the best member has fitness >= this value. 
+            Default is infinity, meaning runs will always go until the GENERATION_COUNT. (DEFAULT = np.inf)
         animate (Bool):
             if True, plot the best and worst individual from certain generations as evolution progresses. (DEFAULT = False)
         open_reward (Bool):
             whether or not to add reward for adjacent empty cells. (DEFAULT = True)
         corner_reward (Bool):
             whether or not to add reward for furniture-occupied corner cells. (DEFAULT = True)
+        coverage_reward (Bool):
+            whether or not to add reward for furniture-occupied cells. (DEFAULT = False)
+        reprod_fit (Bool):
+            reproductive fitness. whether the offspring's chance to inherit a trait from each parent is proportional that parent's fitness.
+            If False, chance will be 50/50 (DEFAULT=False)
+        const_mut (Bool):
+            whether mutation rates remain constant throughout evolution. Rates will decrease with generations if set to False. (DEFAULT = True)
+        immigration (Bool):
+            whether randomly generated individuals should be added (with replacement) to the population at set intervals. (DEFAULT = True)
     """
     layout = maps[name]
-    pop, fit, gen = fit_furniture(layout, furniture, name, animate, open_reward, corner_reward)
+    pop, fit, gen = fit_furniture(layout, furniture, name, fit_thresh, animate, open_reward, corner_reward, coverage_reward, reprod_fit, const_mut, immigration)
     best_fit = max(fit)
     worst_fit = min(fit)
     best_ind = pop[fit.index(best_fit)]
     worst_ind = pop[fit.index(worst_fit)]
-    plot_solution(layout, furniture, best_ind, name, gen, "Best", open_reward, corner_reward)
-    plot_solution(layout, furniture, worst_ind, name, gen, "Worst", open_reward, corner_reward)
+    plot_solution(layout, furniture, best_ind, name, gen, "Best", open_reward, corner_reward, coverage_reward)
+    plot_solution(layout, furniture, worst_ind, name, gen, "Worst", open_reward, corner_reward, coverage_reward)
  
 ##########
 # OUTPUT #
 ##########
-#run_map(tiling_maps, pieces_pentomino, "Pentomino", animate=False, open_reward=False, corner_reward=False)
-#run_map(maps, furnitures,"Compact", animate=True, open_reward=True)
-#run_all_maps(maps, furnitures, animate=False, open_reward=True)
+#run_map(tiling_maps, pieces_pentomino, "Pentomino", fit_thresh=180.0, animate=False, open_reward=False, corner_reward=False, coverage_reward=True, reprod_fit=True, const_mut=True, immigration=True)
+#run_map(maps, furnitures, "BigX", animate=False, open_reward=True, corner_reward=True, coverage_reward=False, reprod_fit=False, const_mut=False, immigration=True)
+#run_all_maps(maps, furnitures, animate=False, open_reward=True, corner_reward=True, coverage_reward=False, reprod_fit=False, const_mut=False, immigration=True)
